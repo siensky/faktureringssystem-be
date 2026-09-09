@@ -1,21 +1,26 @@
 {
   "name": "faktureringssystem-be",
-  "module": "index.ts",
-  "type": "module",
   "private": true,
+  "type": "module",
+  "workspaces": ["services/auth", "services/billing", "services/payments", "packages/*", "apps/*"],
   "scripts": {
-    "migrate": "node-pg-migrate up"
+    "migrate": "node-pg-migrate up",
+    "migrate:down": "node-pg-migrate down",
+    "migrate:redo": "bun run migrate:down && bun run migrate",
+    "codegen": "bun run --cwd packages/contracts codegen",
+    "test": "bun test",
+    "typecheck": "bash scripts/typecheck.sh",
+    "lint": "biome check .",
+    "lint:fix": "biome check --write ."
   },
   "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
     "@types/bun": "latest"
   },
   "peerDependencies": {
     "typescript": "^5"
   },
   "dependencies": {
-    "@fastify/postgres": "^6.0.2",
-    "fastify": "^5.8.4",
-    "node-pg-migrate": "^8.0.4",
-    "postgres": "^3.4.9"
+    "node-pg-migrate": "^8.0.4"
   }
 }
