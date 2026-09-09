@@ -1,0 +1,11 @@
+# Det virtuella miljö-biblioteket byggs på nytt inuti containern av "uv sync".
+.venv
+
+# Pythons kompilerade bytekod-cache — genereras automatiskt, ska inte
+# kopieras in eller committas.
+__pycache__
+*.pyc
+
+# Innehåller hemligheter — ska aldrig hamna i en image. Miljövariabler sätts
+# istället via docker-compose.yml/environment.
+.env
