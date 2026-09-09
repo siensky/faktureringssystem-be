@@ -1,0 +1,40 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://faktureringssystem.se/schemas/envelope.schema.json",
+  "title": "EventEnvelope",
+  "description": "Höljet runt varje affärshändelse som publiceras på RabbitMQ. Se rules/architecture.md, avsnittet Event. Systemhändelser (t.ex. ping i fas 0) använder INTE denna envelope — de är infrastrukturkontroller utan tenant, inte affärshändelser.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["eventId", "eventType", "tenantId", "correlationId", "occurredAt", "payload"],
+  "properties": {
+    "eventId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Unikt per publicerad rad i event_outbox. Samma id vid en omsänd leverans — det är det som gör konsumentens deduplicering på (event_id, consumer) möjlig."
+    },
+    "eventType": {
+      "type": "string",
+      "pattern": "^[a-z_]+\\.[a-z_]+$",
+      "description": "<entitet>.<verb i dåtid>, t.ex. invoice.sent. Aldrig imperativ (send.email) — ett event beskriver något som har hänt."
+    },
+    "tenantId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Obligatoriskt. Saknas det går eventet till dead-letter — gissas aldrig."
+    },
+    "correlationId": {
+      "type": "string",
+      "format": "uuid",
+      "description": "Följer med hela kedjan, satt vid första inkommande request och kopierad vidare i varje event och HTTP-anrop."
+    },
+    "occurredAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "UTC-tidsstämpel för när händelsen faktiskt inträffade i affärslogiken, inte när den publicerades."
+    },
+    "payload": {
+      "type": "object",
+      "description": "Id:n, inte hela objekt. Konsumenten hämtar det den behöver via API."
+    }
+  }
+}
