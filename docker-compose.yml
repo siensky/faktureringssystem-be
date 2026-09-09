@@ -1,20 +1,22 @@
-
+# Startar hela systemet med ett kommando: docker compose up.
+#
+# Två saker värda att veta om layouten:
+#   1. De fyra tjänsternas Dockerfiles bygger med context: . (repo-roten),
+#      inte context: ./services/<namn> — de behöver kunna COPY:a
+#      packages/shared och packages/contracts. Se kommentaren högst upp i
+#      varje Dockerfile.
+#   2. Portarna publiceras till localhost bara för att göra utveckling och
+#      felsökning bekvämt (curl mot en enskild tjänst utan att gå via
+#      nginx). I en riktig driftsättning skulle bara nginx (och Postgres,
+#      om en extern klient behöver den) exponeras utåt — se planens
+#      "Säkerhet: Transportnära grunder": interna S2S-endpoints ska aldrig
+#      nås direkt utifrån.
 
 services:
-  api:
-    build: .
-    ports:
-      - "${API_PORT}:${API_PORT}"
-    environment:
-      - DATABASE_URL=postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/${DB_NAME}
-      - PORT=${API_PORT}
-    depends_on:
-      - db
-
   db:
     image: postgres:15-alpine
     container_name: invoice_postgres_db
-    restart: always
+    restart: unless-stopped
     environment:
       POSTGRES_USER: ${DB_USER}
       POSTGRES_PASSWORD: ${DB_PASSWORD}
@@ -23,6 +25,234 @@ services:
       - "${DB_EXTERNAL_PORT}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  redis:
+    image: redis:7-alpine
+    container_name: invoice_redis
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: invoice_rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+    ports:
+      - "${RABBITMQ_PORT}:5672"
+      - "${RABBITMQ_MANAGEMENT_PORT}:15672"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  # Engångscontainer: skapar en RabbitMQ-användare per tjänst (se
+  # infra/rabbitmq/init.sh) och avslutar sig själv. De fyra tjänsterna
+  # väntar på att den lyckats innan de får starta — annars finns kontona
+  # inte än när tjänsterna försöker logga in.
+  rabbitmq-init:
+    image: curlimages/curl:8.10.1
+    container_name: invoice_rabbitmq_init
+    depends_on:
+      rabbitmq:
+        condition: service_healthy
+    environment:
+      RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
+      RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      AUTH_RABBITMQ_PASSWORD: ${AUTH_RABBITMQ_PASSWORD}
+      BILLING_RABBITMQ_PASSWORD: ${BILLING_RABBITMQ_PASSWORD}
+      PAYMENTS_RABBITMQ_PASSWORD: ${PAYMENTS_RABBITMQ_PASSWORD}
+      DOCUMENTS_RABBITMQ_PASSWORD: ${DOCUMENTS_RABBITMQ_PASSWORD}
+    volumes:
+      - ./infra/rabbitmq/init.sh:/init.sh:ro
+    entrypoint: ["sh", "/init.sh"]
+
+  minio:
+    image: minio/minio:latest
+    container_name: invoice_minio
+    restart: unless-stopped
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD}
+    ports:
+      - "${MINIO_PORT}:9000"
+      - "${MINIO_CONSOLE_PORT}:9001"
+    volumes:
+      - minio_data:/data
+    healthcheck:
+      test: ["CMD", "mc", "ready", "local"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  mailpit:
+    image: axllent/mailpit:latest
+    container_name: invoice_mailpit
+    restart: unless-stopped
+    ports:
+      - "${MAILPIT_SMTP_PORT}:1025"
+      - "${MAILPIT_UI_PORT}:8025"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:8025/livez"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  # ── De fyra tjänsterna ──────────────────────────────────────────────────
+  # healthcheck pekar mot /health/ready (kollar faktiska beroenden: Postgres/
+  # RabbitMQ/Redis), inte /health/live (kollar bara att processen lever) —
+  # se packages/shared/src/health. Det är /health/ready Docker och nginx ska
+  # agera på; /health/live är till för omstartsbeslut hos en orkestrerare så
+  # en tillfälligt onåbar databas inte får en frisk process omstartad i onödan.
+
+  auth:
+    build:
+      context: .
+      dockerfile: services/auth/Dockerfile
+    ports:
+      - "${AUTH_PORT}:${AUTH_PORT}"
+    environment:
+      PORT: ${AUTH_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: amqp://auth:${AUTH_RABBITMQ_PASSWORD}@rabbitmq:5672
+      REDIS_URL: ${REDIS_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:${AUTH_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  billing:
+    build:
+      context: .
+      dockerfile: services/billing/Dockerfile
+    ports:
+      - "${BILLING_PORT}:${BILLING_PORT}"
+    environment:
+      PORT: ${BILLING_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: amqp://billing:${BILLING_RABBITMQ_PASSWORD}@rabbitmq:5672
+      REDIS_URL: ${REDIS_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:${BILLING_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  payments:
+    build:
+      context: .
+      dockerfile: services/payments/Dockerfile
+    ports:
+      - "${PAYMENTS_PORT}:${PAYMENTS_PORT}"
+    environment:
+      PORT: ${PAYMENTS_PORT}
+      DATABASE_URL: ${DATABASE_URL}
+      RABBITMQ_URL: amqp://payments:${PAYMENTS_RABBITMQ_PASSWORD}@rabbitmq:5672
+      REDIS_URL: ${REDIS_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "bun", "-e", "fetch('http://localhost:${PAYMENTS_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  documents:
+    build:
+      context: .
+      dockerfile: services/documents/Dockerfile
+    ports:
+      - "${DOCUMENTS_PORT}:${DOCUMENTS_PORT}"
+    environment:
+      PORT: ${DOCUMENTS_PORT}
+      RABBITMQ_URL: amqp://documents:${DOCUMENTS_RABBITMQ_PASSWORD}@rabbitmq:5672
+      REDIS_URL: ${REDIS_URL}
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      LOG_LEVEL: ${LOG_LEVEL}
+    depends_on:
+      redis:
+        condition: service_healthy
+      rabbitmq-init:
+        condition: service_completed_successfully
+    healthcheck:
+      # Samma idé som ovan, fast med Pythons inbyggda urllib i stället för
+      # Bun/fetch, eftersom det är Python-imagen som kör den här tjänsten.
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:${DOCUMENTS_PORT}/health/ready')"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  nginx:
+    image: nginx:1.27-alpine
+    container_name: invoice_nginx
+    restart: unless-stopped
+    ports:
+      - "${NGINX_PORT}:80"
+    volumes:
+      - ./infra/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      auth:
+        condition: service_healthy
+      billing:
+        condition: service_healthy
+      payments:
+        condition: service_healthy
+      documents:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
 
 volumes:
   postgres_data:
+  minio_data:
