@@ -1,0 +1,7 @@
+# Installeras på nytt inuti containern (och tar för mycket plats/tid att
+# kopiera in en lokal, ev. felaktig, kopia).
+node_modules
+
+# Innehåller hemligheter — ska aldrig hamna i en image. Miljövariabler sätts
+# istället via docker-compose.yml/environment.
+.env

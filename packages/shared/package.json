@@ -1,0 +1,31 @@
+{
+  "name": "@faktura/shared",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "module": "src/index.ts",
+  "types": "src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@fastify/cors": "^10.0.2",
+    "@fastify/helmet": "^12.0.1",
+    "@fastify/rate-limit": "^10.2.2",
+    "amqplib": "^0.10.4",
+    "fastify": "^5.11.2",
+    "ioredis": "^5.4.2",
+    "pino": "^9.5.0",
+    "postgres": "^3.4.9"
+  },
+  "devDependencies": {
+    "@types/amqplib": "^0.10.5",
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  }
+}

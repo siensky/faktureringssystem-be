@@ -1,0 +1,109 @@
+// Delad Fastify-bootstrap för auth/billing/payments. Fas 0 hade tre nästan
+// identiska index.ts — allt det gemensamma (CORS, helmet, bodyLimit, Redis-
+// baserad rate limiting, felhanterare, /health/*, system-ping) bor här i
+// stället (code-style.md #25, #27). Varje tjänsts index.ts blir då bara
+// "läs env, anropa startService, registrera dina egna routes".
+
+import cors from "@fastify/cors";
+import helmet from "@fastify/helmet";
+import rateLimit from "@fastify/rate-limit";
+import Fastify, { type FastifyInstance } from "fastify";
+import type { Logger } from "pino";
+import { registerErrorHandler } from "../errors/handler";
+import { type ReadinessCheck, registerHealthRoutes } from "../health";
+import { startSystemPing } from "../ping";
+import { type RabbitConnection, connectRabbitMQ } from "../rabbitmq";
+import { createRedisClient } from "../redis";
+
+// Att skicka in en egen pino-instans som `loggerInstance` gör att Fastify
+// härleder en annan konkret Logger-generic än sin default, och den exakta
+// typen är irrelevant för kod som bara registrerar routes och plugins —
+// samma "any" som i health/index.ts och errors/handler.ts (code-style.md #16).
+type AnyFastify = FastifyInstance<any, any, any, any, any>;
+
+// 256 KB som standard (planens "Säkerhet: Transportnära grunder"). Endpoints
+// som faktiskt behöver mer (filimport i payments, fas 5) höjer det per
+// route, inte globalt.
+const DEFAULT_BODY_LIMIT = 256 * 1024;
+
+// Grovt globalt tak per instans. Hårdare, kontospecifik strypning på
+// känsliga endpoints (login, BankID-init) läggs till i fas 1/2 — se planens
+// "Säkerhet: Rate limiting". Räknaren ligger i Redis så att flera repliker
+// delar den.
+const RATE_LIMIT_MAX = 300;
+const RATE_LIMIT_WINDOW = "1 minute";
+
+export interface StartServiceOptions {
+  serviceName: string;
+  port: number;
+  rabbitmqUrl: string;
+  redisUrl: string;
+  /** Explicit origin-lista, aldrig "*" när Authorization/cookies är med. */
+  corsOrigins: string[];
+  logger: Logger;
+  /** Readiness-checkar utöver de inbyggda (rabbitmq, redis). */
+  extraReadinessChecks?: ReadinessCheck[];
+  /**
+   * Registrera tjänstens egna routes/plugins. Får Fastify-instansen och de
+   * delade klienterna. Körs efter att bas-plugins registrerats men innan
+   * servern börjar lyssna.
+   */
+  configure?: (app: AnyFastify, ctx: ServiceContext) => Promise<void> | void;
+}
+
+export interface ServiceContext {
+  redis: ReturnType<typeof createRedisClient>;
+  rabbit: RabbitConnection;
+  logger: Logger;
+}
+
+export async function startService(options: StartServiceOptions): Promise<AnyFastify> {
+  const { serviceName, port, logger } = options;
+
+  const app = Fastify({
+    loggerInstance: logger,
+    disableRequestLogging: false,
+    bodyLimit: DEFAULT_BODY_LIMIT,
+  });
+
+  await app.register(cors, { origin: options.corsOrigins });
+  await app.register(helmet);
+
+  const redis = createRedisClient(options.redisUrl);
+  await app.register(rateLimit, { max: RATE_LIMIT_MAX, timeWindow: RATE_LIMIT_WINDOW, redis });
+
+  registerErrorHandler(app, logger);
+
+  const rabbit = await connectRabbitMQ(options.rabbitmqUrl);
+  const pingState = await startSystemPing(rabbit.channel, serviceName, (msg) => {
+    logger.info({ from: msg.service }, "mottog system.ping");
+  });
+
+  registerHealthRoutes(app, [
+    {
+      name: "rabbitmq",
+      check: async () => {
+        if (!rabbit.isHealthy()) throw new Error("RabbitMQ-anslutningen är stängd");
+      },
+    },
+    { name: "redis", check: async () => void (await redis.ping()) },
+    ...(options.extraReadinessChecks ?? []),
+  ]);
+
+  // Tillfällig debug-endpoint för fas 0 — bevisar att ping-eventet gått runt
+  // till alla fyra tjänsterna. Tas bort när riktiga affärsevent finns att
+  // verifiera mot i stället.
+  app.get("/internal/debug/pings-seen", async () => ({ seen: [...pingState.seen] }));
+
+  await options.configure?.(app, { redis, rabbit, logger });
+
+  app.addHook("onClose", async () => {
+    pingState.stop();
+    await rabbit.close();
+    redis.disconnect();
+  });
+
+  await app.listen({ host: "0.0.0.0", port });
+  logger.info({ port }, `${serviceName} lyssnar`);
+  return app;
+}
