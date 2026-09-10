@@ -14,6 +14,11 @@ export { registerHealthRoutes, type ReadinessCheck } from "./health";
 export { startSystemPing, PING_EXCHANGE, type PingState, type PingMessage } from "./ping";
 export { createRedisClient } from "./redis";
 export {
+  startService,
+  type StartServiceOptions,
+  type ServiceContext,
+} from "./service";
+export {
   encryptField,
   decryptField,
   hmacField,
