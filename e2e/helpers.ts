@@ -4,26 +4,52 @@
 import { createHmac } from "node:crypto";
 
 export const AUTH_URL = process.env.AUTH_URL ?? "http://localhost:4001";
+export const BILLING_URL = process.env.BILLING_URL ?? "http://localhost:4002";
 export const DB_URL =
   process.env.E2E_DATABASE_URL ?? "postgresql://sienna:changeme@localhost:5434/invoice_db";
 export const MQ_URL = process.env.E2E_RABBITMQ_URL ?? "amqp://admin:changeme@localhost:5672";
 export const PNR_HMAC_KEY =
   process.env.E2E_PNR_HMAC_KEY ??
   "1111111111111111111111111111111111111111111111111111111111111111";
+export const PNR_ENCRYPTION_KEY =
+  process.env.E2E_PNR_ENCRYPTION_KEY ??
+  "2222222222222222222222222222222222222222222222222222222222222222";
 
 export const PASSWORD = "korrekt-häst-batteri-häftklammer-1";
 export const uniq = () => Math.random().toString(36).slice(2, 10);
 
-export function post(path: string, body: unknown, headers: Record<string, string> = {}) {
-  return fetch(`${AUTH_URL}${path}`, {
+type Headers = Record<string, string>;
+
+export function postTo(base: string, path: string, body: unknown, headers: Headers = {}) {
+  return fetch(`${base}${path}`, {
     method: "POST",
     headers: { "content-type": "application/json", ...headers },
     body: JSON.stringify(body),
   });
 }
 
-export function get(path: string, headers: Record<string, string> = {}) {
-  return fetch(`${AUTH_URL}${path}`, { headers });
+export function putTo(base: string, path: string, body: unknown, headers: Headers = {}) {
+  return fetch(`${base}${path}`, {
+    method: "PUT",
+    headers: { "content-type": "application/json", ...headers },
+    body: JSON.stringify(body),
+  });
+}
+
+export function delTo(base: string, path: string, headers: Headers = {}) {
+  return fetch(`${base}${path}`, { method: "DELETE", headers });
+}
+
+export function getTo(base: string, path: string, headers: Headers = {}) {
+  return fetch(`${base}${path}`, { headers });
+}
+
+export function post(path: string, body: unknown, headers: Headers = {}) {
+  return postTo(AUTH_URL, path, body, headers);
+}
+
+export function get(path: string, headers: Headers = {}) {
+  return getTo(AUTH_URL, path, headers);
 }
 
 export function decodeJwt(token: string): Record<string, unknown> {
