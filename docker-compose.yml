@@ -67,12 +67,14 @@ services:
       - "${RABBITMQ_MANAGEMENT_PORT}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 10s
-      # RabbitMQ tar ~12 s att starta kallt lokalt och kan vara långsammare
-      # på en CI-runner — generös start_period så starten inte blir flaky.
-      retries: 20
-      start_period: 45s
+      interval: 10s
+      timeout: 15s
+      # RabbitMQ tar 30-40 s att bli "check_running"-frisk kallt när hela
+      # stacken byggts och startar samtidigt. Generös start_period +
+      # start_interval (pollar tätt under uppstart) så starten inte blir flaky.
+      retries: 10
+      start_period: 90s
+      start_interval: 3s
 
   # Engångscontainer: skapar en RabbitMQ-användare per tjänst (se
   # infra/rabbitmq/init.sh) och avslutar sig själv. De fyra tjänsterna
@@ -154,6 +156,8 @@ services:
       JWT_USER_SECRET: ${JWT_USER_SECRET}
       AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
       AUTH_STRICT_RATE_LIMIT_MAX: ${AUTH_STRICT_RATE_LIMIT_MAX:-10}
+      JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
+      PNR_HMAC_KEY: ${PNR_HMAC_KEY}
     depends_on:
       db:
         condition: service_healthy

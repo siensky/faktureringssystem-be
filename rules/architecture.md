@@ -55,21 +55,22 @@ Allt som kan köras om **kommer** att köras om — av en retry, en omstart, ett
 
 16. **Två separata funktioner: `requireUser()` och `requireService(scope)`.** Ingen endpoint anropar en generisk "verifiera token". Ett tjänste-token saknar `tenantId` helt — accepteras det på en användar-endpoint blir tenant-filtret tomt och allt läcker till alla.
 17. **`X-Tenant-Id` litas på endast från `requireService()`.** En autentiserad tjänst får hävda vilken tenant den agerar för. En slutanvändare får det aldrig — `requireUser()` ignorerar headern helt.
-18. **Minsta möjliga scope.** En tjänst begär bara de scopes den faktiskt använder.
-19. **Skrivningar går aldrig via S2S-HTTP.** Behöver en tjänst ändra en annans data sker det via event till ägande tjänst.
+18. **Minsta möjliga scope.** En tjänst begär bara de scopes den faktiskt använder. Ett tjänste-token utfärdas via OAuth2 `client_credentials` (`POST /auth/token`); scopen är en mellanslagsseparerad `scope`-claim, och bara scopes som klienten *både* begär och har i `service_clients.allowed_scopes` beviljas. TTL 5 minuter — kort livstid är den enda revokering ett stateless token har.
+19. **Fel scope ger `403`, inte `401`.** Saknad eller ogiltig token = `401` (vem är du?). Giltig token men utan rätt scope = `403` (jag vet vem du är, du får inte). Samma skillnad som `code-style.md` #14.
+20. **Skrivningar går aldrig via S2S-HTTP.** Behöver en tjänst ändra en annans data sker det via event till ägande tjänst.
 
 ## Tokens och tenant-filter
 
-20. **Saknas tenant i `RequestContext` kastas ett fel — filtret får aldrig tyst utebli.** `WHERE tenant_id IS NULL` returnerar inget (ofarligt); ett *bortfallet* filter returnerar alla tenanters rader. Repository-basklassen (`packages/shared`) har därför `tenantId` som en getter som kastar, inte ett fält som kan vara `undefined`.
-21. **JWT-verifiering pinnar algoritmen** (`algorithms: ['HS256']`) och validerar `iss`, `aud` och `token_type`. `alg` i token-headern litas aldrig på (`alg: none`-attacken). Användar-token har `aud: api`, tjänste-token `aud: internal` — en token som passerar fel dörr avvisas på flera oberoende fält.
-22. **HS256 är ett uttalat val, inte en glömska.** Den hemlighet som *verifierar* en token-klass kan också *signera* i den klassen. Skadan begränsas av: separat hemlighet per klass (`JWT_USER_SECRET`, `JWT_SERVICE_SECRET`), distribuerad bara till de tjänster som verifierar respektive klass; kort livstid på tjänste-tokens; och att all signering/verifiering ligger i `packages/shared/auth` så en uppgradering till asymmetriska nycklar är två rader.
+21. **Saknas tenant i `RequestContext` kastas ett fel — filtret får aldrig tyst utebli.** `WHERE tenant_id IS NULL` returnerar inget (ofarligt); ett *bortfallet* filter returnerar alla tenanters rader. Repository-basklassen (`packages/shared`) har därför `tenantId` som en getter som kastar, inte ett fält som kan vara `undefined`.
+22. **JWT-verifiering pinnar algoritmen** (`algorithms: ['HS256']`) och validerar `iss`, `aud` och `token_type`. `alg` i token-headern litas aldrig på (`alg: none`-attacken). Användar-token har `aud: api`, tjänste-token `aud: internal` — en token som passerar fel dörr avvisas på flera oberoende fält.
+23. **HS256 är ett uttalat val, inte en glömska.** Den hemlighet som *verifierar* en token-klass kan också *signera* i den klassen. Skadan begränsas av: separat hemlighet per klass (`JWT_USER_SECRET`, `JWT_SERVICE_SECRET`), distribuerad bara till de tjänster som verifierar respektive klass; kort livstid på tjänste-tokens; och att all signering/verifiering ligger i `packages/shared/auth` så en uppgradering till asymmetriska nycklar är två rader.
 
 ## Enkelhet
 
 Den här delen väger tyngre än den ser ut. Ett system med fyra tjänster, en kö och en cache har redan all komplexitet det tål.
 
-23. **Välj den tråkiga lösningen.** En `WHERE`-sats slår en cache. En kolumn slår en tabell. En funktion slår ett interface.
-24. **Ingen abstraktion förrän du har två verkliga fall.** Ett interface med en implementation är inte flexibilitet, det är ett extra lager att läsa igenom. Undantag: mockade externa tjänster (BankID, e-post, betalningar), där det andra fallet är testet.
-25. **Redis, cache och köer läggs till när något faktiskt är för långsamt** eller när ordningen kräver det — inte i förväg.
-26. **Ta bort kod istället för att kommentera bort den.** Historiken finns i git.
-27. **Om en regel här gör en enkel uppgift krånglig, ifrågasätt regeln** i stället för att bygga runt den. Reglerna finns för att förhindra kaos, inte för att skapa det.
+24. **Välj den tråkiga lösningen.** En `WHERE`-sats slår en cache. En kolumn slår en tabell. En funktion slår ett interface.
+25. **Ingen abstraktion förrän du har två verkliga fall.** Ett interface med en implementation är inte flexibilitet, det är ett extra lager att läsa igenom. Undantag: mockade externa tjänster (BankID, e-post, betalningar), där det andra fallet är testet.
+26. **Redis, cache och köer läggs till när något faktiskt är för långsamt** eller när ordningen kräver det — inte i förväg.
+27. **Ta bort kod istället för att kommentera bort den.** Historiken finns i git.
+28. **Om en regel här gör en enkel uppgift krånglig, ifrågasätt regeln** i stället för att bygga runt den. Reglerna finns för att förhindra kaos, inte för att skapa det.

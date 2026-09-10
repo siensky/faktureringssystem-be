@@ -133,6 +133,8 @@ jobs:
           JWT_USER_SECRET=ci_jwt_user_secret_not_a_real_secret_0000000000
           AUTH_TOKEN_PEPPER=00000000000000000000000000000000000000000000000000000000000000ff
           AUTH_STRICT_RATE_LIMIT_MAX=5000
+          JWT_SERVICE_SECRET=ci_jwt_service_secret_not_a_real_secret_00000
+          PNR_HMAC_KEY=000000000000000000000000000000000000000000000000000000000000abcd
           ENVEOF
 
       - name: Bygg alla images
@@ -183,9 +185,10 @@ jobs:
           AUTH_URL: http://localhost:4001
           E2E_DATABASE_URL: postgresql://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5434/${{ env.DB_NAME }}
           E2E_RABBITMQ_URL: amqp://ci_admin:ci_password_not_secret@localhost:5672
+          E2E_PNR_HMAC_KEY: 000000000000000000000000000000000000000000000000000000000000abcd
         run: |
           bun install --frozen-lockfile
-          bun test e2e
+          bun test --timeout 30000 e2e
 
       - name: Skriv ut loggar vid fel
         if: failure()

@@ -12,7 +12,7 @@
     "typecheck": "bash scripts/typecheck.sh",
     "lint": "biome check .",
     "lint:fix": "biome check --write .",
-    "test:e2e": "bun test e2e"
+    "test:e2e": "bun test --timeout 30000 e2e"
   },
   "devDependencies": {
     "@biomejs/biome": "^1.9.4",
