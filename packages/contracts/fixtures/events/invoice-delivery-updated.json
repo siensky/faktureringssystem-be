@@ -1,0 +1,13 @@
+{
+  "eventId": "1a2b3c4d-0003-4000-8000-000000000003",
+  "eventType": "invoice.delivery_updated",
+  "tenantId": 1,
+  "correlationId": "3c9c1a2e-6c5f-4e0e-9d3b-1a2b3c4d5e6f",
+  "occurredAt": "2026-09-10T08:25:00.000Z",
+  "payload": {
+    "invoiceId": 42,
+    "documentType": "invoice",
+    "deliveryStatus": "bounced",
+    "bounceType": "hard"
+  }
+}

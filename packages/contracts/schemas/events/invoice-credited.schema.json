@@ -1,0 +1,21 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://faktureringssystem.se/schemas/events/invoice-credited.schema.json",
+  "title": "InvoiceCreditedPayload",
+  "description": "Payload för invoice.credited. Publiceras av billing i samma transaktion som POST /admin/invoices/:id/credit skapar kreditfakturan i status settled och sätter originalet till credited. invoiceId är KREDITFAKTURAN — det är den som har en snapshot och som skickas till kunden som PDF (domain.md #35).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["invoiceId", "creditsInvoiceId"],
+  "properties": {
+    "invoiceId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Kreditfakturans id."
+    },
+    "creditsInvoiceId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Originalfakturan som krediterades."
+    }
+  }
+}

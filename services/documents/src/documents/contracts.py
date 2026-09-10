@@ -34,6 +34,13 @@ class EnvelopeValidationError(ValueError):
         super().__init__(f"Ogiltig event-envelope: {'; '.join(errors)}")
 
 
+class PayloadValidationError(ValueError):
+    def __init__(self, event_type: str, errors: list[str]) -> None:
+        self.event_type = event_type
+        self.errors = errors
+        super().__init__(f"Ogiltig payload för {event_type}: {'; '.join(errors)}")
+
+
 @cache
 def _load_schema(relative_path: str) -> dict[str, Any]:
     path = _SCHEMAS_DIR / relative_path
@@ -44,6 +51,19 @@ def _load_schema(relative_path: str) -> dict[str, Any]:
 @cache
 def _envelope_validator() -> Draft202012Validator:
     schema = _load_schema("envelope.schema.json")
+    return Draft202012Validator(schema, format_checker=FormatChecker())
+
+
+def _payload_schema_path(event_type: str) -> str:
+    # invoice.sent -> events/invoice-sent.schema.json
+    # invoice.delivery_updated -> events/invoice-delivery-updated.schema.json
+    slug = event_type.replace(".", "-").replace("_", "-")
+    return f"events/{slug}.schema.json"
+
+
+@cache
+def _payload_validator(event_type: str) -> Draft202012Validator:
+    schema = _load_schema(_payload_schema_path(event_type))
     return Draft202012Validator(schema, format_checker=FormatChecker())
 
 
@@ -60,3 +80,25 @@ def assert_valid_envelope(data: Any) -> None:
     errors: list[ValidationError] = sorted(validator.iter_errors(data), key=str)
     if errors:
         raise EnvelopeValidationError([e.message for e in errors])
+
+
+def is_valid_payload(event_type: str, payload: Any) -> bool:
+    try:
+        return _payload_validator(event_type).is_valid(payload)
+    except FileNotFoundError:
+        return False
+
+
+def assert_valid_payload(event_type: str, payload: Any) -> None:
+    """Kastar PayloadValidationError om payloaden inte matchar sin eventtyp.
+    Ett eventtyp utan schema är ett kodfel (felstavat eller glömt schema),
+    inte en tyst genomsläppning — det ska synas."""
+    try:
+        validator = _payload_validator(event_type)
+    except FileNotFoundError as err:
+        raise PayloadValidationError(
+            event_type, [f"inget schema på {_payload_schema_path(event_type)}"]
+        ) from err
+    errors: list[ValidationError] = sorted(validator.iter_errors(payload), key=str)
+    if errors:
+        raise PayloadValidationError(event_type, [e.message for e in errors])
