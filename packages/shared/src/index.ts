@@ -27,7 +27,17 @@ export {
   USER_TOKEN,
   createRequireUser,
   contextOf,
+  signServiceToken,
+  verifyServiceToken,
+  assertScope,
+  SERVICE_TOKEN,
+  createRequireService,
+  serviceContextOf,
+  getServiceToken,
   type AccessTokenClaims,
+  type VerifiedServiceToken,
+  type ServiceContext as M2MServiceContext,
+  type ServiceTokenClientOptions,
 } from "./auth";
 export {
   encryptField,

@@ -5,3 +5,17 @@ export {
   type AccessTokenClaims,
 } from "./tokens";
 export { createRequireUser, contextOf } from "./require-user";
+export {
+  signServiceToken,
+  verifyServiceToken,
+  assertScope,
+  SERVICE_TOKEN,
+  type ServiceTokenClaims,
+  type VerifiedServiceToken,
+} from "./service-tokens";
+export {
+  createRequireService,
+  serviceContextOf,
+  type ServiceContext,
+} from "./require-service";
+export { getServiceToken, type ServiceTokenClientOptions } from "./service-token-client";
