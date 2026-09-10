@@ -39,4 +39,4 @@ AI-hjälp är fortsatt värdefull utöver implementationen: frågor, förklaring
 
 ## Status
 
-Fas 0 pågår enligt den reviderade planen (se PLAN.md). Full arkitektur: se plan-filen i `~/.claude/plans/`.
+Fas 0–3 mergade. Fas 4 (documents: PDF, S3, e-postutskick, leveransstatus) ligger i PR och väntar på granskning. Full arkitektur: se plan-filen i `~/.claude/plans/`.

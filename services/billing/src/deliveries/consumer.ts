@@ -42,10 +42,9 @@ export async function startDeliveryConsumer(opts: {
   const { rabbit, service, logger } = opts;
   const channel: Channel = await rabbit.connection.createChannel();
 
-  // Exchanget deklareras av infra/rabbitmq/init.sh (durable topic). Att
-  // assert:a med samma parametrar är ofarligt och gör konsumenten
-  // körbar även i en testmiljö där init-scriptet inte kört.
-  await channel.assertExchange(EXCHANGE, "topic", { durable: true });
+  // 'events' deklareras EN gång av infra/rabbitmq/init.sh (durable topic).
+  // billing-kontot har medvetet inte 'configure' på det (se init.sh), så vi
+  // deklarerar det aldrig här — bara binder vår egen kö mot det.
   await channel.assertQueue(QUEUE, { durable: true });
   for (const key of ROUTING_KEYS) {
     await channel.bindQueue(QUEUE, EXCHANGE, key);
@@ -85,6 +84,16 @@ export async function startDeliveryConsumer(opts: {
     } catch (error) {
       if (error instanceof EnvelopeValidationError || error instanceof PayloadValidationError) {
         logger.error({ err: error }, "delivery-consumer: ogiltigt event, kastas utan requeue");
+        channel.ack(msg);
+        return;
+      }
+      if (msg.fields.redelivered) {
+        // Andra försöket felade också — ge upp så en förgiftad rad inte
+        // loopar hett. Fas 7 inför en riktig dead-letter-kö med larm.
+        logger.error(
+          { err: error },
+          "delivery-consumer: transient fel även vid omleverans — ger upp (se fas 7 DLQ)",
+        );
         channel.ack(msg);
         return;
       }

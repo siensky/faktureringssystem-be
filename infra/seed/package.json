@@ -1,0 +1,8 @@
+{
+  "name": "faktura-seed",
+  "private": true,
+  "description": "Engångs-provisionering av S2S-klienter i service_clients. Kör bara i utvecklings-/CI-miljö.",
+  "dependencies": {
+    "postgres": "^3.4.9"
+  }
+}

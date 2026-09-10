@@ -90,6 +90,10 @@ export const up = (pgm) => {
       document_id         INTEGER NOT NULL REFERENCES documents (id) ON DELETE RESTRICT,
       recipient_email     TEXT NOT NULL,
       subject             TEXT NOT NULL,
+      -- Förs vidare hela kedjan (architecture.md #5): satt av konsumenten
+      -- när mejlet köas, återanvänt i delivery_updated-eventen som
+      -- e-postarbetaren och webhooken publicerar.
+      correlation_id      UUID NOT NULL,
       -- Monoton hos billing (domain.md #29). Här räcker CHECK:en; själva
       -- monotoniciteten upprätthålls av de villkorade UPDATE:erna i koden.
       status              TEXT NOT NULL DEFAULT 'queued'

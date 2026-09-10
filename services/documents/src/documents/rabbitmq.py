@@ -13,10 +13,22 @@ from datetime import UTC, datetime
 from typing import Any
 
 import aio_pika
-from aio_pika.abc import AbstractChannel, AbstractConnection
+from aio_pika.abc import AbstractChannel, AbstractConnection, AbstractExchange
 
 PING_EXCHANGE = "system.ping"
 PING_INTERVAL_SECONDS = 5
+
+# Det delade affärsevent-exchanget. Deklareras EN gång av
+# infra/rabbitmq/init.sh (durable topic). documents-kontot har medvetet
+# inte 'configure' på det (se init.sh), så vi deklarerar det aldrig —
+# ensure=False ger ett Exchange-objekt utan passiv deklaration, bara för
+# att kunna publicera och binda mot namnet.
+EVENTS_EXCHANGE = "events"
+
+
+async def events_exchange(channel: AbstractChannel) -> AbstractExchange:
+    return await channel.get_exchange(EVENTS_EXCHANGE, ensure=False)
+
 
 # asyncio.create_task() håller bara en SVAG referens till tasken om inget
 # annat gör det — den kan då plockas bort av GC mitt i väntan. Denna

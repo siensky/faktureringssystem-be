@@ -5,9 +5,13 @@ import { createHmac } from "node:crypto";
 
 export const AUTH_URL = process.env.AUTH_URL ?? "http://localhost:4001";
 export const BILLING_URL = process.env.BILLING_URL ?? "http://localhost:4002";
+export const DOCUMENTS_URL = process.env.DOCUMENTS_URL ?? "http://localhost:4004";
+export const MAILPIT_URL = process.env.MAILPIT_URL ?? "http://localhost:8025";
 export const DB_URL =
   process.env.E2E_DATABASE_URL ?? "postgresql://sienna:changeme@localhost:5434/invoice_db";
 export const MQ_URL = process.env.E2E_RABBITMQ_URL ?? "amqp://admin:changeme@localhost:5672";
+export const EMAIL_WEBHOOK_SECRET =
+  process.env.E2E_EMAIL_WEBHOOK_SECRET ?? "changeme-email-webhook";
 export const PNR_HMAC_KEY =
   process.env.E2E_PNR_HMAC_KEY ??
   "1111111111111111111111111111111111111111111111111111111111111111";
@@ -125,4 +129,27 @@ export async function registerVerifyLogin(email: string): Promise<{
  *  e2e-harnesset inte behöver @faktura/shared. */
 export function hmacField(value: string, keyHex: string): string {
   return createHmac("sha256", Buffer.from(keyHex, "hex")).update(value, "utf8").digest("hex");
+}
+
+/**
+ * Signaturen för POST /webhooks/email-status: HMAC-SHA256 (hex) över
+ * "<timestamp>.<rå body>" med EMAIL_WEBHOOK_SECRET som nyckel (rå sträng,
+ * inte hex) — speglar documents/src/documents/webhooks.py verify_signature.
+ */
+export function signEmailWebhook(secret: string, timestamp: string, body: string): string {
+  return createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
+}
+
+/** Pollar tills predicate() ger truthy eller deadline nås. Returnerar värdet. */
+export async function until<T>(
+  predicate: () => Promise<T | undefined | null | false>,
+  { timeoutMs = 30000, intervalMs = 500 }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<T> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const value = await predicate();
+    if (value) return value;
+    if (Date.now() > deadline) throw new Error("until(): tidsgräns nådd");
+    await new Promise((r) => setTimeout(r, intervalMs));
+  }
 }
