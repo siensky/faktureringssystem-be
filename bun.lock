@@ -37,6 +37,7 @@
       "name": "@faktura/shared",
       "version": "0.0.0",
       "dependencies": {
+        "@faktura/contracts": "workspace:*",
         "@fastify/cors": "^10.0.2",
         "@fastify/helmet": "^12.0.1",
         "@fastify/rate-limit": "^10.2.2",
@@ -78,6 +79,9 @@
       "dependencies": {
         "@faktura/contracts": "workspace:*",
         "@faktura/shared": "workspace:*",
+        "fastify": "^5.11.2",
+        "ioredis": "^5.4.2",
+        "postgres": "^3.4.9",
       },
       "devDependencies": {
         "@types/bun": "latest",
