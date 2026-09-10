@@ -46,6 +46,18 @@ describe("computeLine", () => {
     expect(computeLine({ quantity: 1, unitPriceOre: 2, vatRate: 25 }).lineVatOre).toBe(1);
   });
 
+  test("bråkkvantitet med flyttalsdrift avrundas rätt (1,115 * 100 öre = 111,5 -> 112)", () => {
+    // 1.115 kan inte representeras exakt i flyttal — naiv 1.115 * 100 ger
+    // 111.4999… och skulle runda till 111. Heltalsuppdelningen ger 111,5.
+    expect(computeLine({ quantity: 1.115, unitPriceOre: 100, vatRate: 0 }).lineExclVatOre).toBe(
+      112,
+    );
+    expect(computeLine({ quantity: 0.145, unitPriceOre: 100, vatRate: 0 }).lineExclVatOre).toBe(15);
+    expect(computeLine({ quantity: 10.075, unitPriceOre: 100, vatRate: 0 }).lineExclVatOre).toBe(
+      1008,
+    );
+  });
+
   test("alla tillåtna momssatser fungerar", () => {
     for (const rate of VAT_RATES) {
       const line = computeLine({ quantity: 1, unitPriceOre: 10000, vatRate: rate });
