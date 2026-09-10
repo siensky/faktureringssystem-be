@@ -1,11 +1,13 @@
-// JSON Schema för kund-endpoints. type-beroende krav (company -> orgNumber,
-// private -> pnr) kan JSON Schema uttrycka, men felmeddelandet blir
-// tydligare i servicen — schemat kollar formen, servicen kollar samspelet.
+// JSON Schema för kund-endpoints. Formen kollas här; samspelet (company ->
+// orgNumber, private -> pnr) och mod-10 på org/pnr kollas i servicen mot
+// @faktura/shared för ett tydligt felmeddelande.
 
 const email = { type: "string", format: "email", maxLength: 320 } as const;
 const name = { type: "string", minLength: 1, maxLength: 200 } as const;
-const pnr = { type: "string", pattern: "^[0-9]{10,12}$" } as const;
-const orgNumber = { type: "string", minLength: 6, maxLength: 20 } as const;
+// 10 eller 12 siffror, valfri -/+ -separator och blanksteg. normalizePnr
+// kanoniserar; isValidPnr kontrollsiffre- och datumvaliderar.
+const pnr = { type: "string", minLength: 10, maxLength: 15 } as const;
+const orgNumber = { type: "string", minLength: 10, maxLength: 13 } as const;
 const addr = { type: "string", minLength: 1, maxLength: 200 } as const;
 const zip = { type: "string", minLength: 1, maxLength: 12 } as const;
 const paymentTermsDays = { type: "integer", minimum: 0, maximum: 365 } as const;
@@ -30,6 +32,7 @@ export const createCustomerBody = {
 export const updateCustomerBody = {
   type: "object",
   additionalProperties: false,
+  minProperties: 1,
   properties: {
     name,
     email,
@@ -46,4 +49,13 @@ export const customerIdParams = {
   additionalProperties: false,
   required: ["id"],
   properties: { id: { type: "integer", minimum: 1 } },
+} as const;
+
+export const listQuery = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
+  },
 } as const;

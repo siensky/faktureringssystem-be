@@ -17,29 +17,31 @@ export function registerCustomerRoutes(
   },
 ): void {
   const c = createCustomerControllers(service, sql);
+  const u = { preHandler: deps.userChain };
 
   app.post<{ Body: CreateCustomerInput }>(
     "/admin/customers",
-    { preHandler: deps.userChain, schema: { body: schema.createCustomerBody } },
+    { ...u, schema: { body: schema.createCustomerBody } },
     c.create,
   );
-  app.get("/admin/customers", { preHandler: deps.userChain }, c.list);
+  app.get<{ Querystring: { limit?: number; offset?: number } }>(
+    "/admin/customers",
+    { ...u, schema: { querystring: schema.listQuery } },
+    c.list,
+  );
   app.get<{ Params: { id: number } }>(
     "/admin/customers/:id",
-    { preHandler: deps.userChain, schema: { params: schema.customerIdParams } },
+    { ...u, schema: { params: schema.customerIdParams } },
     c.get,
   );
   app.put<{ Params: { id: number }; Body: UpdateCustomerInput }>(
     "/admin/customers/:id",
-    {
-      preHandler: deps.userChain,
-      schema: { params: schema.customerIdParams, body: schema.updateCustomerBody },
-    },
+    { ...u, schema: { params: schema.customerIdParams, body: schema.updateCustomerBody } },
     c.update,
   );
   app.delete<{ Params: { id: number } }>(
     "/admin/customers/:id",
-    { preHandler: deps.userChain, schema: { params: schema.customerIdParams } },
+    { ...u, schema: { params: schema.customerIdParams } },
     c.remove,
   );
 

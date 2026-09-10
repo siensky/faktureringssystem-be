@@ -15,8 +15,9 @@ export interface InvoiceRow {
   id: number;
   tenant_id: number;
   customer_id: number;
-  invoice_number: number;
-  ocr_number: string;
+  // NULL på utkast; tilldelas vid send/credit.
+  invoice_number: number | null;
+  ocr_number: string | null;
   invoice_type: InvoiceType;
   status: InvoiceStatus;
   delivery_status: DeliveryStatus;
@@ -53,10 +54,10 @@ export interface InvoiceItemRow {
 
 export interface LineInputDto {
   description: string;
-  /** Antal — får vara bråktal (t.ex. 2,5 timmar). */
+  /** Antal — får vara bråktal (t.ex. 2,5 timmar), upp till tre decimaler. */
   quantity: number;
-  /** Styckpris i KRONOR i API:t; lagras i öre. */
-  unitPrice: number;
+  /** Styckpris i HELTAL öre (belopp kommer in i öre vid gränsen, database.md #6). */
+  unitPriceOre: number;
   vatRate: VatRate;
   unit?: string;
 }

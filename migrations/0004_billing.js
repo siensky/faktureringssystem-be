@@ -9,6 +9,12 @@
  * (invoice_items), RESTRICT för sådant som aldrig får försvinna under
  * fötterna på en bokföringspost (kund med fakturor) (#20).
  *
+ * Fakturanummer och OCR tilldelas vid UTSKICK (POST /:id/send), inte när
+ * utkastet skapas — ett utkast är ingen bokföringspost, och att förbruka
+ * ett nummer på ett utkast som sedan raderas skulle riva ett hål i serien
+ * (domain.md #6). Därför är invoice_number/ocr_number NULL för utkast, med
+ * en CHECK som kräver dem för allt annat.
+ *
  * @type {import('node-pg-migrate').ColumnDefinitions | undefined}
  */
 export const shorthands = undefined;
@@ -17,9 +23,9 @@ export const shorthands = undefined;
 export const up = (pgm) => {
   pgm.sql(`
     -- En rad per tenant. Skapas lat (billing/src/company-settings) första
-    -- gången en admin rör den. company_name/org_number fylls i av admin;
-    -- tenant_status är billings lokala läsmodell (Domänmodell #8, #10) —
-    -- uppdateras av tenant.suspended/reactivated i en senare fas.
+    -- gången en admin fyller i den eller en faktura skickas. En GET som
+    -- inte hittar raden svarar med defaultvärden i stället för att skapa
+    -- den — läsningar har inga sidoeffekter.
     CREATE TABLE company_settings (
       tenant_id          INTEGER PRIMARY KEY REFERENCES tenants (id) ON DELETE CASCADE,
       company_name       TEXT,
@@ -46,8 +52,9 @@ export const up = (pgm) => {
       email              TEXT NOT NULL,
       email_valid        BOOLEAN NOT NULL DEFAULT true,
       -- Företagskund: org_number. Privatkund: personnumret KRYPTERAT
-      -- (pnr_encrypted, AES-GCM) + pnr_hmac för exakt uppslag. Aldrig i
-      -- klartext (planens Personnummer-avsnitt, domain.md #20).
+      -- (pnr_encrypted, AES-GCM) + pnr_hmac för exakt uppslag, kanoniserat
+      -- till 12 siffror innan HMAC (@faktura/shared normalizePnr) så det
+      -- matchar users.pnr_hash. Aldrig i klartext (domain.md #20).
       org_number         TEXT,
       pnr_encrypted      TEXT,
       pnr_hmac           TEXT,
@@ -59,14 +66,24 @@ export const up = (pgm) => {
       created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
 
+      -- Exakt en form: företag har org_number och inget pnr, privat har
+      -- bådadera pnr-fälten och inget org_number. Databasen ska inte kunna
+      -- hamna mittemellan.
       CONSTRAINT customers_type_shape CHECK (
-        (customer_type = 'company' AND org_number IS NOT NULL)
+        (customer_type = 'company'
+          AND org_number IS NOT NULL
+          AND pnr_encrypted IS NULL AND pnr_hmac IS NULL)
         OR
-        (customer_type = 'private' AND pnr_encrypted IS NOT NULL AND pnr_hmac IS NOT NULL)
+        (customer_type = 'private'
+          AND pnr_encrypted IS NOT NULL AND pnr_hmac IS NOT NULL
+          AND org_number IS NULL)
       )
     );
     CREATE INDEX customers_tenant_id_idx ON customers (tenant_id);
-    CREATE INDEX customers_pnr_hmac_idx ON customers (tenant_id, pnr_hmac) WHERE pnr_hmac IS NOT NULL;
+    -- Per tenant unikt på personnummer så samma person inte blir två
+    -- kundrader. NULL (företagskunder) räknas inte av unique.
+    CREATE UNIQUE INDEX customers_pnr_hmac_key ON customers (tenant_id, pnr_hmac)
+      WHERE pnr_hmac IS NOT NULL;
 
     CREATE TABLE invoice_templates (
       id                   INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
@@ -86,8 +103,10 @@ export const up = (pgm) => {
       id                       INTEGER GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
       tenant_id                INTEGER NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
       customer_id              INTEGER NOT NULL REFERENCES customers (id) ON DELETE RESTRICT,
-      invoice_number           INTEGER NOT NULL,
-      ocr_number               TEXT NOT NULL,
+      -- NULL på utkast; tilldelas vid send/credit under radlås på
+      -- company_settings.next_invoice_number.
+      invoice_number           INTEGER,
+      ocr_number               TEXT,
       invoice_type             TEXT NOT NULL DEFAULT 'invoice'
         CHECK (invoice_type IN ('invoice', 'credit_note', 'reminder')),
       -- Bokföringsmässig livscykel, ägs av admins handling i billing.
@@ -96,7 +115,7 @@ export const up = (pgm) => {
       -- Leveransstatus, ägs av documents rapporter. Monoton.
       delivery_status          TEXT NOT NULL DEFAULT 'none'
         CHECK (delivery_status IN ('none', 'queued', 'sent', 'delivered', 'bounced', 'failed')),
-      date_issued              DATE NOT NULL DEFAULT CURRENT_DATE,
+      date_issued              DATE NOT NULL,
       date_due                 DATE NOT NULL,
       currency                 TEXT NOT NULL DEFAULT 'SEK',
       total_excl_vat_ore       BIGINT NOT NULL DEFAULT 0,
@@ -112,9 +131,15 @@ export const up = (pgm) => {
 
       -- Per tenant, inte globalt (database.md #18). Kollision är omöjlig
       -- per konstruktion eftersom OCR härleds ur invoice_number, men
-      -- constrainten ligger kvar som databasgaranti.
+      -- constrainten ligger kvar som databasgaranti. Flera NULL tillåts
+      -- (utkast), så partiell unik hanteras av Postgres NULL-semantik.
       CONSTRAINT invoices_number_unique UNIQUE (tenant_id, invoice_number),
-      CONSTRAINT invoices_ocr_unique UNIQUE (tenant_id, ocr_number)
+      CONSTRAINT invoices_ocr_unique UNIQUE (tenant_id, ocr_number),
+      -- Bara utkast får sakna nummer/OCR.
+      CONSTRAINT invoices_numbered_unless_draft CHECK (
+        status = 'draft'
+        OR (invoice_number IS NOT NULL AND ocr_number IS NOT NULL)
+      )
     );
     CREATE INDEX invoices_tenant_id_idx ON invoices (tenant_id);
     CREATE INDEX invoices_customer_id_idx ON invoices (customer_id);
@@ -134,9 +159,11 @@ export const up = (pgm) => {
       line_excl_vat_ore  BIGINT NOT NULL,
       line_vat_ore       BIGINT NOT NULL,
       line_incl_vat_ore  BIGINT NOT NULL,
-      created_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+      created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+      updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
     );
     CREATE INDEX invoice_items_invoice_id_idx ON invoice_items (invoice_id);
+    CREATE INDEX invoice_items_tenant_id_idx ON invoice_items (tenant_id);
 
     -- Frusen kopia av fakturan som den såg ut vid utskick. Documents
     -- renderar PDF ur den här, aldrig de levande tabellerna, så en senare
@@ -147,6 +174,7 @@ export const up = (pgm) => {
       payload    JSONB NOT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT now()
     );
+    CREATE INDEX invoice_snapshots_tenant_id_idx ON invoice_snapshots (tenant_id);
 
     -- En rad per inbetalning (Domänmodell #4). paid_ore beräknas som
     -- SUM(amount_ore), lagras aldrig. UNIQUE (tenant_id, payment_id) gör en

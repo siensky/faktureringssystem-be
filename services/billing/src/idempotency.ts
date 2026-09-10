@@ -11,18 +11,23 @@
 //      hade anspråket legat i samma transaktion som resursen hade den
 //      andra requesten bara blockerat tyst till första committat.
 //      (Medveten avvikelse från planens "i samma transaktion som
-//      resursen", noterad i PR-beskrivningen.)
-//   3. Kör själva arbetet i sin egen transaktion.
-//   4. Vid lyckat: UPDATE nyckeln till 'completed' med svaret.
-//      Vid fel: DELETE det egna 'in_progress'-anspråket och låt felet
-//      bubbla — nästa försök får börja om rent.
+//      resursen" på just ANSPRÅKET, noterad i PR-beskrivningen.)
+//   3. Kör arbetet OCH sätt nyckeln till 'completed' i SAMMA transaktion,
+//      så completion committas atomiskt med fakturan. Dör processen mitt
+//      i rullas bådadera tillbaka och nyckeln står kvar 'in_progress' —
+//      ett omtag efter stale-gränsen börjar då om rent (ingen dubblett,
+//      för inget committades).
+//   4. Failar arbetet: transaktionen rullas tillbaka; en separat
+//      städ-DELETE tar bort det egna 'in_progress'-anspråket.
 //
 // Krock på ett redan existerande anspråk:
-//   completed + samma hash  -> spela upp det lagrade svaret oförändrat
-//   completed + annan hash   -> 422 (samma nyckel, annan body = klientfel)
-//   in_progress, färskt      -> 409 (en samtidig dubblett pågår)
-//   in_progress, för gammalt -> ta över anspråket (processen som tog det
-//                               kraschade sannolikt före UPDATE/DELETE)
+//   annan endpoint             -> 422 (samma nyckel återanvänd mot annan operation)
+//   completed + samma hash     -> spela upp det lagrade svaret oförändrat
+//   completed + annan hash      -> 422 (samma nyckel, annan body = klientfel)
+//   in_progress, färskt        -> 409 (en samtidig dubblett pågår)
+//   in_progress, för gammalt   -> ta över anspråket (processen som tog det
+//                                 kraschade sannolikt, och arbetet rullades
+//                                 tillbaka med den)
 
 import { createHash } from "node:crypto";
 import { Conflict, InternalError, UnprocessableEntity } from "@faktura/shared";
@@ -30,8 +35,9 @@ import type { JsonValue } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
 
 const TTL_HOURS = 24;
-// Ett anspråk som stått 'in_progress' längre än så antas övergivet (processen
-// dog mellan anspråket och completed/rollback). Väl tilltaget — en normal
+// Ett anspråk som stått 'in_progress' längre än så antas övergivet: eftersom
+// completion numera committas atomiskt med arbetet betyder 'in_progress'
+// alltid att arbetet INTE committades. Väl tilltaget — en normal
 // skapanderequest tar millisekunder.
 const STALE_MINUTES = 10;
 
@@ -41,6 +47,7 @@ export interface IdempotencyOutcome {
 }
 
 interface IdempotencyRow {
+  endpoint: string;
   request_hash: string;
   state: "in_progress" | "completed";
   response_status: number | null;
@@ -69,7 +76,7 @@ export interface WithIdempotencyArgs<T extends IdempotencyOutcome> {
   key: string;
   endpoint: string;
   requestBody: unknown;
-  /** Utför arbetet. Får en transaktion; kastar vid fel. */
+  /** Utför arbetet i den medskickade transaktionen; kastar vid fel. */
   run: (tx: TransactionSql) => Promise<T>;
 }
 
@@ -85,20 +92,31 @@ export async function withIdempotency<T extends IdempotencyOutcome>(
   }
 
   try {
-    const result = await sql.begin((tx) => args.run(tx as TransactionSql));
-    await sql`
-      UPDATE idempotency_keys
-      SET state = 'completed', response_status = ${result.status}, response_body = ${sql.json(
-        result.body,
-      )}
-      WHERE tenant_id = ${tenantId} AND key = ${key}
-    `;
+    const result = await sql.begin(async (tx) => {
+      const r = await args.run(tx as TransactionSql);
+      // Committas tillsammans med resursen — inte i en efterföljande sats.
+      await tx`
+        UPDATE idempotency_keys
+        SET state = 'completed', response_status = ${r.status},
+            response_body = ${tx.json(r.body)}
+        WHERE tenant_id = ${tenantId} AND key = ${key}
+      `;
+      return r;
+    });
     return { status: result.status, body: result.body, replayed: false };
   } catch (error) {
-    await sql`
-      DELETE FROM idempotency_keys
-      WHERE tenant_id = ${tenantId} AND key = ${key} AND state = 'in_progress'
-    `;
+    // Arbetet + completion rullades tillbaka tillsammans; anspråket står
+    // kvar 'in_progress'. Städa bort det så nästa försök inte behöver vänta
+    // ut stale-gränsen. Misslyckas städningen är originalfelet viktigare —
+    // stale-redningen tar raden till slut.
+    try {
+      await sql`
+        DELETE FROM idempotency_keys
+        WHERE tenant_id = ${tenantId} AND key = ${key} AND state = 'in_progress'
+      `;
+    } catch (cleanupError) {
+      void cleanupError;
+    }
     throw error;
   }
 }
@@ -121,15 +139,20 @@ async function claim(
   if (inserted.count === 1) return { kind: "fresh" };
 
   const [row] = await sql<IdempotencyRow[]>`
-    SELECT request_hash, state, response_status, response_body, created_at
+    SELECT endpoint, request_hash, state, response_status, response_body, created_at
     FROM idempotency_keys
     WHERE tenant_id = ${tenantId} AND key = ${key}
     LIMIT 1
   `;
   if (!row) {
     // Extremt smalt race: raden städades bort mellan INSERT och SELECT.
-    // Be klienten försöka igen hellre än att gissa.
     throw new Conflict("Idempotensnyckeln är i ett övergående läge, försök igen");
+  }
+
+  // Samma nyckel mot en annan endpoint är ett klientfel, inte en replay —
+  // annars kan en /credit-request tyst spela upp ett tidigare /send-svar.
+  if (row.endpoint !== endpoint) {
+    throw new UnprocessableEntity("Idempotency-Key har redan använts mot en annan endpoint");
   }
 
   if (row.state === "completed") {
@@ -147,7 +170,7 @@ async function claim(
   if (ageMs < STALE_MINUTES * 60_000) {
     throw new Conflict("En identisk request pågår redan (Idempotency-Key)");
   }
-  // Ta över det övergivna anspråket.
+  // Ta över det övergivna anspråket (dess arbete rullades tillbaka).
   const reclaimed = await sql`
     UPDATE idempotency_keys
     SET request_hash = ${requestHash}, endpoint = ${endpoint},
@@ -156,7 +179,6 @@ async function claim(
       AND created_at = ${row.created_at}
   `;
   if (reclaimed.count !== 1) {
-    // Någon annan hann ta över samtidigt.
     throw new Conflict("En identisk request pågår redan (Idempotency-Key)");
   }
   return { kind: "fresh" };

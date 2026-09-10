@@ -5,6 +5,8 @@ import * as schema from "./schema";
 import type { InvoiceService } from "./services";
 import type { CreateInvoiceInput, InvoiceStatus, UpdateInvoiceInput } from "./types";
 
+type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
+
 type PreHandler = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
 export function registerInvoiceRoutes(
@@ -24,7 +26,7 @@ export function registerInvoiceRoutes(
     { ...u, schema: { body: schema.createInvoiceBody } },
     c.create,
   );
-  app.get<{ Querystring: { status?: InvoiceStatus } }>(
+  app.get<{ Querystring: ListQuery }>(
     "/admin/invoices",
     { ...u, schema: { querystring: schema.listInvoicesQuery } },
     c.list,

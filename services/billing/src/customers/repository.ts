@@ -46,11 +46,11 @@ export class CustomerRepository extends TenantScopedRepository {
     return row;
   }
 
-  async list(): Promise<CustomerRow[]> {
+  async list(limit: number, offset: number): Promise<CustomerRow[]> {
     return this.sql<CustomerRow[]>`
       SELECT * FROM customers WHERE tenant_id = ${this.tenantId}
       ORDER BY lower(name), id
-      LIMIT 500
+      LIMIT ${limit} OFFSET ${offset}
     `;
   }
 
@@ -64,9 +64,10 @@ export class CustomerRepository extends TenantScopedRepository {
   async update(
     id: number,
     patch: Record<string, string | number | null>,
+    db: Db = this.sql,
   ): Promise<CustomerRow | undefined> {
-    const [row] = await this.sql<CustomerRow[]>`
-      UPDATE customers SET ${this.sql(patch)}, updated_at = now()
+    const [row] = await db<CustomerRow[]>`
+      UPDATE customers SET ${db(patch)}, updated_at = now()
       WHERE id = ${id} AND tenant_id = ${this.tenantId}
       RETURNING *
     `;
@@ -74,8 +75,8 @@ export class CustomerRepository extends TenantScopedRepository {
   }
 
   /** Returnerar antal raderade rader (0 = fanns inte i den här tenanten). */
-  async remove(id: number): Promise<number> {
-    const res = await this.sql`
+  async remove(id: number, db: Db = this.sql): Promise<number> {
+    const res = await db`
       DELETE FROM customers WHERE id = ${id} AND tenant_id = ${this.tenantId}
     `;
     return res.count;

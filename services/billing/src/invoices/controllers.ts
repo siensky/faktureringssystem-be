@@ -6,6 +6,8 @@ import { withIdempotency } from "../idempotency";
 import type { InvoiceService } from "./services";
 import type { CreateInvoiceInput, InvoiceStatus, UpdateInvoiceInput } from "./types";
 
+type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
+
 export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
   return {
     async create(request: FastifyRequest<{ Body: CreateInvoiceInput }>, reply: FastifyReply) {
@@ -22,11 +24,8 @@ export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
       return reply.status(outcome.status).send(outcome.body);
     },
 
-    async list(
-      request: FastifyRequest<{ Querystring: { status?: InvoiceStatus } }>,
-      reply: FastifyReply,
-    ) {
-      return reply.send(await service.list(contextOf(request), request.query.status));
+    async list(request: FastifyRequest<{ Querystring: ListQuery }>, reply: FastifyReply) {
+      return reply.send(await service.list(contextOf(request), request.query));
     },
 
     async get(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {

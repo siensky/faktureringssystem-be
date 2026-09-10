@@ -3,8 +3,11 @@
 //
 // Regler som bor här:
 //   - draft är enda ändringsbara läget; PUT/DELETE mot annat -> 409 (domain.md #1)
-//   - fakturanummer tas ur company_settings under radlås i skapandetx:en,
-//     OCR härleds ur numret (domain.md #6–7, planens Domänmodell #5)
+//   - fakturanummer + OCR tilldelas vid SEND/CREDIT, inte när utkastet
+//     skapas — ett utkast förbrukar inget nummer, så att radera det river
+//     inget hål i serien (domain.md #6). Numret tas ur company_settings
+//     under radlås i samma transaktion som det tilldelas (domain.md #7),
+//     och låset tas så sent som möjligt så det hålls kort.
 //   - moms per rad, avrundning en gång på radnivå, totalen = summan av
 //     avrundade rader (domain.md #10)
 //   - send: snapshot + status draft->sent + invoice.sent via outbox, allt
@@ -18,27 +21,34 @@ import {
   NotFound,
   type RequestContext,
   UnprocessableEntity,
+  deriveOcr,
   writeEvent,
 } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { CompanySettingsRepository } from "../company-settings/repository";
 import { addDays, todayInStockholm } from "../domain/dates";
-import { deriveOcr } from "../domain/ocr";
 import { type LineAmounts, computeLine, sumTotals } from "../domain/vat";
 import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
 import { type InsertItemData, InvoiceRepository } from "./repository";
-import type { CreateInvoiceInput, InvoiceStatus, LineInputDto, UpdateInvoiceInput } from "./types";
+import type {
+  CreateInvoiceInput,
+  InvoiceRow,
+  InvoiceStatus,
+  LineInputDto,
+  UpdateInvoiceInput,
+} from "./types";
 
 const SERVICE_NAME = "billing";
-const CREDITABLE = new Set(["sent", "overdue", "paid"]);
+const CREDITABLE: ReadonlySet<InvoiceStatus> = new Set(["sent", "overdue", "paid"]);
+const PAGE_DEFAULT = 100;
+const PAGE_MAX = 200;
 
 function toItems(lines: LineInputDto[]): InsertItemData[] {
   return lines.map((line, i) => {
-    const unitPriceOre = Math.round(line.unitPrice * 100);
     const amounts = computeLine({
       quantity: line.quantity,
-      unitPriceOre,
+      unitPriceOre: line.unitPriceOre,
       vatRate: line.vatRate,
     });
     return {
@@ -46,7 +56,7 @@ function toItems(lines: LineInputDto[]): InsertItemData[] {
       description: line.description,
       quantity: line.quantity,
       unit: line.unit ?? "st",
-      unitPriceOre,
+      unitPriceOre: line.unitPriceOre,
       vatRate: line.vatRate,
       ...amounts,
     };
@@ -59,6 +69,16 @@ const amountsOf = (it: InsertItemData): LineAmounts => ({
   lineInclVatOre: it.lineInclVatOre,
 });
 
+/** Kastar om datumen är orimliga. dateIssued får inte ligga i framtiden. */
+function assertDates(dateIssued: string, dateDue: string): void {
+  if (dateIssued > todayInStockholm()) {
+    throw new BadRequest("Fakturadatum kan inte ligga i framtiden");
+  }
+  if (dateDue < dateIssued) {
+    throw new BadRequest("Förfallodatum kan inte vara före fakturadatum");
+  }
+}
+
 export function createInvoiceService(sql: Sql) {
   const invRepo = (ctx: RequestContext) => new InvoiceRepository(sql, ctx);
   const csRepo = (ctx: RequestContext) => new CompanySettingsRepository(sql, ctx);
@@ -68,35 +88,42 @@ export function createInvoiceService(sql: Sql) {
     const row = await repo.findById(id, db);
     if (!row) throw new NotFound("Fakturan finns inte");
     const items = await repo.findItems(db, id);
-    const paid = row.status === "draft" ? 0 : await repo.paidOre(id);
+    const paid = row.status === "draft" ? 0 : await repo.paidOre(id, db);
     return toDetail(row, items, paid);
+  }
+
+  /** Tar radlåset på nummerserien och returnerar { number, ocr }. Anropa sent i tx:en. */
+  async function allocateNumber(
+    ctx: RequestContext,
+    tx: TransactionSql,
+  ): Promise<{ number: number; ocr: string }> {
+    const settingsRepo = csRepo(ctx);
+    const settings = await settingsRepo.lockForUpdate(tx);
+    const number = settings.next_invoice_number;
+    await settingsRepo.bumpInvoiceNumber(tx);
+    return { number, ocr: deriveOcr(number) };
   }
 
   return {
     async createInTx(ctx: RequestContext, tx: TransactionSql, input: CreateInvoiceInput) {
       const repo = invRepo(ctx);
-      const settingsRepo = csRepo(ctx);
 
-      const customer = await repo.findCustomer(input.customerId);
+      const customer = await repo.findCustomer(input.customerId, tx);
       if (!customer) throw new BadRequest("Okänd kund");
 
-      // Radlås på nummerserien innan vi läser numret (domain.md #7).
-      const settings = await settingsRepo.lockForUpdate(tx);
-      const invoiceNumber = Number(settings.next_invoice_number);
-      const ocrNumber = deriveOcr(invoiceNumber);
-      await settingsRepo.bumpInvoiceNumber(tx);
-
+      const settings = await csRepo(ctx).find();
       const items = toItems(input.lines);
       const totals = sumTotals(items.map(amountsOf));
 
       const dateIssued = input.dateIssued ?? todayInStockholm();
-      const terms = customer.payment_terms_days ?? settings.payment_terms_days;
+      const terms = customer.payment_terms_days ?? settings?.payment_terms_days ?? 30;
       const dateDue = input.dateDue ?? addDays(dateIssued, terms);
+      assertDates(dateIssued, dateDue);
 
       const invoice = await repo.insertInvoice(tx, {
         customerId: customer.id,
-        invoiceNumber,
-        ocrNumber,
+        invoiceNumber: null, // tilldelas vid send
+        ocrNumber: null,
         invoiceType: "invoice",
         status: "draft",
         dateIssued,
@@ -115,15 +142,21 @@ export function createInvoiceService(sql: Sql) {
         resourceType: "invoice",
         resourceId: String(invoice.id),
         correlationId: ctx.correlationId,
-        metadata: { invoiceNumber, totalInclVatOre: totals.totalInclVatOre },
+        metadata: { totalInclVatOre: totals.totalInclVatOre },
       });
 
       return { status: 201, body: await detail(ctx, tx, invoice.id) };
     },
 
-    async list(ctx: RequestContext, status?: InvoiceStatus) {
-      const rows = await invRepo(ctx).list(status);
-      return rows.map(toSummary);
+    async list(
+      ctx: RequestContext,
+      opts: { status?: InvoiceStatus; limit?: number; offset?: number },
+    ) {
+      const limit = Math.min(opts.limit ?? PAGE_DEFAULT, PAGE_MAX);
+      const offset = opts.offset ?? 0;
+      const rows = await invRepo(ctx).list({ status: opts.status, limit: limit + 1, offset });
+      const hasMore = rows.length > limit;
+      return { items: rows.slice(0, limit).map(toSummary), hasMore };
     },
 
     async get(ctx: RequestContext, id: number) {
@@ -142,6 +175,7 @@ export function createInvoiceService(sql: Sql) {
         const dateIssued = input.dateIssued ?? current.date_issued;
         const dateDue = input.dateDue ?? current.date_due;
         const currency = input.currency ?? current.currency;
+        assertDates(dateIssued, dateDue);
 
         let totals = {
           totalExclVatOre: Number(current.total_excl_vat_ore),
@@ -175,6 +209,7 @@ export function createInvoiceService(sql: Sql) {
         if (current.status !== "draft") {
           throw new Conflict("Endast utkast kan raderas");
         }
+        // Utkast har inget nummer -> ingen lucka i serien.
         await repo.deleteInvoice(tx, id);
         await writeAuditLog(tx, {
           tenantId: ctx.tenantId,
@@ -183,7 +218,6 @@ export function createInvoiceService(sql: Sql) {
           resourceType: "invoice",
           resourceId: String(id),
           correlationId: ctx.correlationId,
-          metadata: { invoiceNumber: current.invoice_number },
         });
         return { status: "ok" as const };
       });
@@ -191,7 +225,6 @@ export function createInvoiceService(sql: Sql) {
 
     async sendInTx(ctx: RequestContext, tx: TransactionSql, id: number) {
       const repo = invRepo(ctx);
-      const settingsRepo = csRepo(ctx);
 
       const invoice = await repo.lockById(tx, id);
       if (!invoice) throw new NotFound("Fakturan finns inte");
@@ -199,20 +232,37 @@ export function createInvoiceService(sql: Sql) {
         throw new Conflict("Fakturan är redan skickad");
       }
 
-      const settings = await settingsRepo.lockForUpdate(tx);
+      // Läs allt som inte kräver låset först.
+      const customer = await repo.findCustomerFull(invoice.customer_id, tx);
+      if (!customer) throw new BadRequest("Fakturans kund saknas");
+      const items = await repo.findItems(tx, id);
+
+      // Kritisk sektion: lås company_settings, kontrollera avsändaruppgifter,
+      // ta numret, skriv. Hålls kort.
+      const settings = await csRepo(ctx).lockForUpdate(tx);
       if (!settings.company_name || !settings.org_number || !settings.bankgiro) {
         throw new UnprocessableEntity(
           "Företagsnamn, organisationsnummer och bankgiro måste vara ifyllda innan en faktura kan skickas",
         );
       }
+      const number = settings.next_invoice_number;
+      const ocr = deriveOcr(number);
+      await csRepo(ctx).bumpInvoiceNumber(tx);
+      await repo.markSent(tx, id, number, ocr);
 
-      const customer = await repo.findCustomerFull(invoice.customer_id);
-      if (!customer) throw new BadRequest("Fakturans kund saknas");
-      const items = await repo.findItems(tx, id);
-
-      const payload = buildSnapshotPayload({ invoice, items, company: settings, customer });
+      const sentInvoice: InvoiceRow = {
+        ...invoice,
+        invoice_number: number,
+        ocr_number: ocr,
+        status: "sent",
+      };
+      const payload = buildSnapshotPayload({
+        invoice: sentInvoice,
+        items,
+        company: settings,
+        customer,
+      });
       await repo.insertSnapshot(tx, id, payload);
-      await repo.markSent(tx, id);
 
       await writeEvent(tx, {
         sourceService: SERVICE_NAME,
@@ -228,6 +278,7 @@ export function createInvoiceService(sql: Sql) {
         resourceType: "invoice",
         resourceId: String(id),
         correlationId: ctx.correlationId,
+        metadata: { invoiceNumber: number },
       });
 
       return { status: 200, body: await detail(ctx, tx, id) };
@@ -235,7 +286,6 @@ export function createInvoiceService(sql: Sql) {
 
     async creditInTx(ctx: RequestContext, tx: TransactionSql, id: number) {
       const repo = invRepo(ctx);
-      const settingsRepo = csRepo(ctx);
 
       const original = await repo.lockById(tx, id);
       if (!original) throw new NotFound("Fakturan finns inte");
@@ -245,11 +295,6 @@ export function createInvoiceService(sql: Sql) {
       if (!CREDITABLE.has(original.status)) {
         throw new Conflict("Fakturan är i ett läge som inte kan krediteras");
       }
-
-      const settings = await settingsRepo.lockForUpdate(tx);
-      const creditNumber = Number(settings.next_invoice_number);
-      const creditOcr = deriveOcr(creditNumber);
-      await settingsRepo.bumpInvoiceNumber(tx);
 
       const originalItems = await repo.findItems(tx, id);
       const creditItems: InsertItemData[] = originalItems.map((it, i) => ({
@@ -266,11 +311,14 @@ export function createInvoiceService(sql: Sql) {
       }));
       const totals = sumTotals(creditItems.map(amountsOf));
 
+      // Kritisk sektion: nummerserien.
+      const { number, ocr } = await allocateNumber(ctx, tx);
+
       const today = todayInStockholm();
       const creditNote = await repo.insertInvoice(tx, {
         customerId: original.customer_id,
-        invoiceNumber: creditNumber,
-        ocrNumber: creditOcr,
+        invoiceNumber: number,
+        ocrNumber: ocr,
         invoiceType: "credit_note",
         status: "settled",
         dateIssued: today,
@@ -298,7 +346,7 @@ export function createInvoiceService(sql: Sql) {
         resourceType: "invoice",
         resourceId: String(original.id),
         correlationId: ctx.correlationId,
-        metadata: { creditNoteId: creditNote.id, creditNumber },
+        metadata: { creditNoteId: creditNote.id, creditNumber: number },
       });
 
       return { status: 201, body: await detail(ctx, tx, creditNote.id) };

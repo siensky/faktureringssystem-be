@@ -1,9 +1,17 @@
-// Affärslogik för company-settings. Lat skapande, partiell uppdatering,
-// och en S2S-läsning för documents/payments.
+// Affärslogik för company-settings. Lat skapande vid skrivning (aldrig vid
+// läsning), partiell uppdatering med format­validering, och en S2S-läsning
+// för documents/payments.
 
-import { NotFound, type RequestContext } from "@faktura/shared";
+import {
+  BadRequest,
+  NotFound,
+  type RequestContext,
+  isValidBankgiro,
+  isValidOrgNumber,
+} from "@faktura/shared";
 import type { Sql } from "postgres";
-import { toAdminView, toInternalView } from "./mappers";
+import { writeAuditLog } from "../audit";
+import { defaultAdminView, toAdminView, toInternalView } from "./mappers";
 import { CompanySettingsRepository } from "./repository";
 import type { CompanySettingsPatch } from "./types";
 
@@ -11,11 +19,20 @@ export function createCompanySettingsService(sql: Sql) {
   const repo = (ctx: RequestContext) => new CompanySettingsRepository(sql, ctx);
 
   return {
+    /** GET har inga sidoeffekter: finns ingen rad, svara med defaultvärden. */
     async getForAdmin(ctx: RequestContext) {
-      return toAdminView(await repo(ctx).lazyGet());
+      const row = await repo(ctx).find();
+      return row ? toAdminView(row) : defaultAdminView();
     },
 
     async update(ctx: RequestContext, patch: CompanySettingsPatch) {
+      if (patch.bankgiro !== undefined && !isValidBankgiro(patch.bankgiro)) {
+        throw new BadRequest("Ogiltigt bankgironummer");
+      }
+      if (patch.orgNumber !== undefined && !isValidOrgNumber(patch.orgNumber)) {
+        throw new BadRequest("Ogiltigt organisationsnummer");
+      }
+
       const columns: Record<string, string | number | null> = {};
       if (patch.companyName !== undefined) columns.company_name = patch.companyName;
       if (patch.orgNumber !== undefined) columns.org_number = patch.orgNumber;
@@ -25,19 +42,30 @@ export function createCompanySettingsService(sql: Sql) {
       if (patch.addressZip !== undefined) columns.address_zip = patch.addressZip;
       if (patch.addressCity !== undefined) columns.address_city = patch.addressCity;
       if (patch.logoUrl !== undefined) columns.logo_url = patch.logoUrl;
-      if (patch.reminderFee !== undefined) {
-        columns.reminder_fee_ore = Math.round(patch.reminderFee * 100);
-      }
+      if (patch.reminderFeeOre !== undefined) columns.reminder_fee_ore = patch.reminderFeeOre;
       if (patch.paymentTermsDays !== undefined) {
         columns.payment_terms_days = patch.paymentTermsDays;
       }
 
-      const r = repo(ctx);
-      await r.lazyGet(); // se till att raden finns innan UPDATE
-      if (Object.keys(columns).length === 0) {
-        return toAdminView(await r.lazyGet());
-      }
-      return toAdminView(await r.update(columns));
+      return sql.begin(async (tx) => {
+        const r = new CompanySettingsRepository(sql, ctx);
+        await r.lazyGet(tx);
+        const row =
+          Object.keys(columns).length === 0 ? await r.lazyGet(tx) : await r.update(columns, tx);
+
+        // bankgiro styr vart alla framtida betalningar går — den mest
+        // värdefulla mutationen i tjänsten, får inte sakna spår.
+        await writeAuditLog(tx, {
+          tenantId: ctx.tenantId,
+          actorUserId: ctx.userId,
+          action: "company_settings.updated",
+          resourceType: "company_settings",
+          resourceId: String(ctx.tenantId),
+          correlationId: ctx.correlationId,
+          metadata: { fields: Object.keys(columns) },
+        });
+        return toAdminView(row);
+      });
     },
 
     /** S2S: full vy för snapshot/PDF. 404 om tenanten aldrig rört billing. */

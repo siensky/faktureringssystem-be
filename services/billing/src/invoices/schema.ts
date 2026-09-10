@@ -1,14 +1,17 @@
-// JSON Schema för faktura-endpoints (code-style.md #18).
+// JSON Schema för faktura-endpoints (code-style.md #18). Belopp in i öre,
+// aldrig kronor-float. Gränserna på quantity och unitPriceOre är valda så
+// att radbeloppsberäkningen (quantity * unitPriceOre) håller sig inom
+// säkert heltalsintervall även vid 200 rader.
 
 const isoDate = { type: "string", format: "date" } as const;
 const line = {
   type: "object",
   additionalProperties: false,
-  required: ["description", "quantity", "unitPrice", "vatRate"],
+  required: ["description", "quantity", "unitPriceOre", "vatRate"],
   properties: {
     description: { type: "string", minLength: 1, maxLength: 500 },
-    quantity: { type: "number", exclusiveMinimum: 0, maximum: 1_000_000 },
-    unitPrice: { type: "number", minimum: 0, maximum: 100_000_000 },
+    quantity: { type: "number", exclusiveMinimum: 0, maximum: 100_000 },
+    unitPriceOre: { type: "integer", minimum: 0, maximum: 100_000_000 },
     vatRate: { type: "number", enum: [0, 6, 12, 25] },
     unit: { type: "string", minLength: 1, maxLength: 20 },
   },
@@ -33,6 +36,7 @@ export const createInvoiceBody = {
 export const updateInvoiceBody = {
   type: "object",
   additionalProperties: false,
+  minProperties: 1,
   properties: {
     dateIssued: isoDate,
     dateDue: isoDate,
@@ -56,6 +60,8 @@ export const listInvoicesQuery = {
       type: "string",
       enum: ["draft", "sent", "paid", "overdue", "credited", "superseded", "settled"],
     },
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
   },
 } as const;
 

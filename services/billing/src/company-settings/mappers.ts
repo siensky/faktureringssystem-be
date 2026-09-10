@@ -1,7 +1,11 @@
 // Databasrad -> API-form. Belopp öre -> kronor sista steget (database.md #8).
 // De interna räknarna (next_invoice_number) lämnar aldrig admin-API:t.
 
-import type { CompanySettingsRow } from "./types";
+import { COMPANY_SETTINGS_DEFAULTS, type CompanySettingsRow } from "./types";
+
+function readiness(row: CompanySettingsRow): boolean {
+  return row.company_name !== null && row.org_number !== null && row.bankgiro !== null;
+}
 
 export function toAdminView(row: CompanySettingsRow) {
   return {
@@ -18,7 +22,22 @@ export function toAdminView(row: CompanySettingsRow) {
     reminderFee: Number(row.reminder_fee_ore) / 100,
     paymentTermsDays: row.payment_terms_days,
     // Fakturan kan inte skickas förrän avsändaruppgifterna finns.
-    isReadyToSend: row.company_name !== null && row.org_number !== null && row.bankgiro !== null,
+    isReadyToSend: readiness(row),
+  };
+}
+
+/** Vy när raden inte skapats än — GET ska inte ha sidoeffekter. */
+export function defaultAdminView() {
+  return {
+    companyName: null,
+    orgNumber: null,
+    bankgiro: null,
+    vatNumber: null,
+    address: { street: null, zip: null, city: null },
+    logoUrl: null,
+    reminderFee: COMPANY_SETTINGS_DEFAULTS.reminderFeeOre / 100,
+    paymentTermsDays: COMPANY_SETTINGS_DEFAULTS.paymentTermsDays,
+    isReadyToSend: false,
   };
 }
 

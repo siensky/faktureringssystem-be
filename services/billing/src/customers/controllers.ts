@@ -22,8 +22,11 @@ export function createCustomerControllers(service: CustomerService, sql: Sql) {
       return reply.status(outcome.status).send(outcome.body);
     },
 
-    async list(request: FastifyRequest, reply: FastifyReply) {
-      return reply.send(await service.list(contextOf(request)));
+    async list(
+      request: FastifyRequest<{ Querystring: { limit?: number; offset?: number } }>,
+      reply: FastifyReply,
+    ) {
+      return reply.send(await service.list(contextOf(request), request.query));
     },
 
     async get(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {

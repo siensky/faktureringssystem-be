@@ -1,6 +1,6 @@
 // ALL SQL för company-settings (database.md #22). company_settings har en
-// rad per tenant med tenant_id som PK — den skapas LAT första gången en
-// admin (eller en fakturaskapande transaktion) rör tenanten.
+// rad per tenant med tenant_id som PK — den skapas LAT vid första
+// skrivningen (PUT, eller en fakturaskickstransaktion), aldrig av en GET.
 
 import { TenantScopedRepository } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
@@ -16,7 +16,7 @@ export class CompanySettingsRepository extends TenantScopedRepository {
     super(ctx);
   }
 
-  /** Skapar raden om den saknas och returnerar den. Kan köras i en yttre tx. */
+  /** Skapar raden om den saknas och returnerar den. Kör helst i en yttre tx. */
   async lazyGet(db: Db = this.sql): Promise<CompanySettingsRow> {
     await db`
       INSERT INTO company_settings (tenant_id) VALUES (${this.tenantId})
@@ -37,10 +37,24 @@ export class CompanySettingsRepository extends TenantScopedRepository {
     return row;
   }
 
+  async update(
+    patch: Record<string, string | number | null>,
+    db: Db = this.sql,
+  ): Promise<CompanySettingsRow> {
+    const [row] = await db<CompanySettingsRow[]>`
+      UPDATE company_settings SET ${db(patch)}, updated_at = now()
+      WHERE tenant_id = ${this.tenantId}
+      RETURNING *
+    `;
+    if (!row) throw new Error("UPDATE company_settings träffade ingen rad");
+    return row;
+  }
+
   /**
    * Låser tenantens rad FOR UPDATE inne i en skapandetransaktion — så två
    * samtidiga fakturor inte kan läsa samma next_invoice_number (domain.md
-   * #7, database.md #24). Skapar raden lat om den saknas.
+   * #7, database.md #24). Skapar raden lat om den saknas. Tas så SENT som
+   * möjligt i transaktionen så låset hålls kort.
    */
   async lockForUpdate(tx: TransactionSql): Promise<CompanySettingsRow> {
     await tx`
@@ -61,15 +75,5 @@ export class CompanySettingsRepository extends TenantScopedRepository {
       SET next_invoice_number = next_invoice_number + 1, updated_at = now()
       WHERE tenant_id = ${this.tenantId}
     `;
-  }
-
-  async update(patch: Record<string, string | number | null>): Promise<CompanySettingsRow> {
-    const [row] = await this.sql<CompanySettingsRow[]>`
-      UPDATE company_settings SET ${this.sql(patch)}, updated_at = now()
-      WHERE tenant_id = ${this.tenantId}
-      RETURNING *
-    `;
-    if (!row) throw new Error("UPDATE company_settings träffade ingen rad");
-    return row;
   }
 }

@@ -8,7 +8,9 @@ export interface CompanySettingsRow {
   address_zip: string | null;
   address_city: string | null;
   logo_url: string | null;
-  next_invoice_number: string;
+  // INTEGER-kolumn -> postgres.js ger ett tal.
+  next_invoice_number: number;
+  // BIGINT -> postgres.js ger en sträng.
   reminder_fee_ore: string;
   payment_terms_days: number;
   tenant_status: "active" | "suspended";
@@ -25,7 +27,14 @@ export interface CompanySettingsPatch {
   addressZip?: string;
   addressCity?: string;
   logoUrl?: string;
-  /** Kronor i API:t, öre i databasen. */
-  reminderFee?: number;
+  /** Heltal öre — belopp kommer in i öre vid API-gränsen (database.md #6). */
+  reminderFeeOre?: number;
   paymentTermsDays?: number;
 }
+
+// Måste spegla DEFAULT-värdena i migrations/0004_billing.js — används av
+// GET innan raden skapats så en läsning slipper ha en sidoeffekt.
+export const COMPANY_SETTINGS_DEFAULTS = {
+  reminderFeeOre: 6000,
+  paymentTermsDays: 30,
+} as const;

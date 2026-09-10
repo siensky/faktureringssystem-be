@@ -25,10 +25,12 @@ import { createInvoiceService } from "./invoices/services";
 const logger = createLogger(SERVICE_NAME);
 
 /**
- * Finns tenanten och är den aktiv? auth äger tabellen — billing läser den
- * direkt här som en övergångslösning. Fas 6 byter detta mot den lokala
- * läsmodellen company_settings.tenant_status som hålls uppdaterad av
- * tenant.suspended / tenant.reactivated (planens Domänmodell #8, #10).
+ * Finns tenanten och är den aktiv? auth äger tabellen (architecture.md #2)
+ * — billing läser den direkt här som en ÖVERGÅNGSLÖSNING med känt slutdatum:
+ * fas 6 inför den lokala läsmodellen company_settings.tenant_status (hålls
+ * uppdaterad av tenant.suspended / tenant.reactivated, planens Domänmodell
+ * #8, #10) och fas 7 sätter separata Postgres-roller med GRANT bara på egna
+ * tabeller — då SLUTAR den här queryn fungera och måste vara borta.
  */
 async function isTenantActive(tenantId: number): Promise<boolean> {
   const [row] = await sql<{ status: string }[]>`
@@ -54,6 +56,10 @@ startService({
   ],
   configure: async (app, ctx) => {
     const requireUser = createRequireUser(config.jwtUserSecret);
+    // Tenant-statuskollen sitter bara på requireService, inte requireUser:
+    // en avstängd tenants admin kan alltså fortsätta arbeta tills
+    // access-token går ut (15 min). Medvetet val — revideras i fas 6 när
+    // tenant.suspended konsumeras och kan invalidera sessioner aktivt.
     const requireService = createRequireService(config.jwtServiceSecret, {
       checkTenantActive: isTenantActive,
     });

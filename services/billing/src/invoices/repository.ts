@@ -1,10 +1,11 @@
 // ALL SQL för fakturor och fakturarader (database.md #22). Tenant-filtrerad.
-// Nummerserien tas ur company_settings under radlås — se
-// CompanySettingsRepository.lockForUpdate.
+// Nummerserien tas ur company_settings under radlås vid send/credit — se
+// CompanySettingsRepository.lockForUpdate. Utkast har invoice_number NULL.
 
 import { TenantScopedRepository } from "@faktura/shared";
 import type { JsonObject } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
+import type { CustomerRow } from "../customers/types";
 import type { InvoiceItemRow, InvoiceRow, InvoiceStatus, InvoiceType } from "./types";
 
 type Db = Sql | TransactionSql;
@@ -15,8 +16,8 @@ export interface InvoiceListRow extends InvoiceRow {
 
 export interface InsertInvoiceData {
   customerId: number;
-  invoiceNumber: number;
-  ocrNumber: string;
+  invoiceNumber: number | null;
+  ocrNumber: string | null;
   invoiceType: InvoiceType;
   status: InvoiceStatus;
   dateIssued: string;
@@ -52,8 +53,9 @@ export class InvoiceRepository extends TenantScopedRepository {
   /** Minimal kundläsning för att validera customerId och ärva betalningsvillkor. */
   async findCustomer(
     id: number,
+    db: Db = this.sql,
   ): Promise<{ id: number; name: string; payment_terms_days: number | null } | undefined> {
-    const [row] = await this.sql<{ id: number; name: string; payment_terms_days: number | null }[]>`
+    const [row] = await db<{ id: number; name: string; payment_terms_days: number | null }[]>`
       SELECT id, name, payment_terms_days FROM customers
       WHERE id = ${id} AND tenant_id = ${this.tenantId} LIMIT 1
     `;
@@ -61,10 +63,8 @@ export class InvoiceRepository extends TenantScopedRepository {
   }
 
   /** Full kundrad — behövs för snapshotens adressblock. */
-  async findCustomerFull(
-    id: number,
-  ): Promise<import("../customers/types").CustomerRow | undefined> {
-    const [row] = await this.sql<import("../customers/types").CustomerRow[]>`
+  async findCustomerFull(id: number, db: Db = this.sql): Promise<CustomerRow | undefined> {
+    const [row] = await db<CustomerRow[]>`
       SELECT * FROM customers WHERE id = ${id} AND tenant_id = ${this.tenantId} LIMIT 1
     `;
     return row;
@@ -90,38 +90,44 @@ export class InvoiceRepository extends TenantScopedRepository {
     return row;
   }
 
+  /** En multi-row INSERT — håller kort kritisk sektion när fakturanumret är låst. */
   async insertItems(tx: TransactionSql, invoiceId: number, items: InsertItemData[]): Promise<void> {
-    for (const it of items) {
-      await tx`
-        INSERT INTO invoice_items (
-          invoice_id, tenant_id, position, description, quantity, unit,
-          unit_price_ore, vat_rate,
-          line_excl_vat_ore, line_vat_ore, line_incl_vat_ore
-        ) VALUES (
-          ${invoiceId}, ${this.tenantId}, ${it.position}, ${it.description},
-          ${it.quantity}, ${it.unit}, ${it.unitPriceOre}, ${it.vatRate},
-          ${it.lineExclVatOre}, ${it.lineVatOre}, ${it.lineInclVatOre}
-        )
-      `;
-    }
+    if (items.length === 0) return;
+    const rows = items.map((it) => ({
+      invoice_id: invoiceId,
+      tenant_id: this.tenantId,
+      position: it.position,
+      description: it.description,
+      quantity: it.quantity,
+      unit: it.unit,
+      unit_price_ore: it.unitPriceOre,
+      vat_rate: it.vatRate,
+      line_excl_vat_ore: it.lineExclVatOre,
+      line_vat_ore: it.lineVatOre,
+      line_incl_vat_ore: it.lineInclVatOre,
+    }));
+    await tx`INSERT INTO invoice_items ${tx(rows)}`;
   }
 
-  async list(status?: InvoiceStatus): Promise<InvoiceListRow[]> {
+  async list(opts: { status?: InvoiceStatus; limit: number; offset: number }): Promise<
+    InvoiceListRow[]
+  > {
+    const { status, limit, offset } = opts;
     if (status) {
       return this.sql<InvoiceListRow[]>`
         SELECT i.*, c.name AS customer_name
         FROM invoices i JOIN customers c ON c.id = i.customer_id
         WHERE i.tenant_id = ${this.tenantId} AND i.status = ${status}
-        ORDER BY i.invoice_number DESC
-        LIMIT 500
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT ${limit} OFFSET ${offset}
       `;
     }
     return this.sql<InvoiceListRow[]>`
       SELECT i.*, c.name AS customer_name
       FROM invoices i JOIN customers c ON c.id = i.customer_id
       WHERE i.tenant_id = ${this.tenantId}
-      ORDER BY i.invoice_number DESC
-      LIMIT 500
+      ORDER BY i.created_at DESC, i.id DESC
+      LIMIT ${limit} OFFSET ${offset}
     `;
   }
 
@@ -185,9 +191,17 @@ export class InvoiceRepository extends TenantScopedRepository {
     `;
   }
 
-  async markSent(tx: TransactionSql, id: number): Promise<void> {
+  /** draft -> sent, och tilldelar samtidigt nummer + OCR. */
+  async markSent(
+    tx: TransactionSql,
+    id: number,
+    invoiceNumber: number,
+    ocrNumber: string,
+  ): Promise<void> {
     await tx`
-      UPDATE invoices SET status = 'sent', sent_at = now(), updated_at = now()
+      UPDATE invoices SET
+        status = 'sent', sent_at = now(), updated_at = now(),
+        invoice_number = ${invoiceNumber}, ocr_number = ${ocrNumber}
       WHERE id = ${id} AND tenant_id = ${this.tenantId}
     `;
   }
@@ -225,15 +239,15 @@ export class InvoiceRepository extends TenantScopedRepository {
     return row;
   }
 
-  async findByIdBasic(id: number): Promise<InvoiceRow | undefined> {
-    const [row] = await this.sql<InvoiceRow[]>`
+  async findByIdBasic(id: number, db: Db = this.sql): Promise<InvoiceRow | undefined> {
+    const [row] = await db<InvoiceRow[]>`
       SELECT * FROM invoices WHERE id = ${id} AND tenant_id = ${this.tenantId} LIMIT 1
     `;
     return row;
   }
 
-  async paidOre(invoiceId: number): Promise<number> {
-    const [row] = await this.sql<{ paid: string }[]>`
+  async paidOre(invoiceId: number, db: Db = this.sql): Promise<number> {
+    const [row] = await db<{ paid: string }[]>`
       SELECT COALESCE(SUM(amount_ore), 0)::bigint AS paid
       FROM invoice_payments
       WHERE invoice_id = ${invoiceId} AND tenant_id = ${this.tenantId}
