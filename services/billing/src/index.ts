@@ -18,6 +18,8 @@ import { SERVICE_NAME, config } from "./config";
 import { registerCustomerRoutes } from "./customers/routes";
 import { createCustomerService } from "./customers/services";
 import { sql } from "./db";
+import { startDeliveryConsumer } from "./deliveries/consumer";
+import { createDeliveryService } from "./deliveries/service";
 import { requireAdmin } from "./guards";
 import { registerInvoiceRoutes } from "./invoices/routes";
 import { createInvoiceService } from "./invoices/services";
@@ -101,8 +103,18 @@ startService({
       },
     });
 
+    // Konsumerar invoice.delivery_updated från documents och skriver
+    // invoices.delivery_status monotont (domain.md #29). Fall A i
+    // architecture.md #7 — markering + skrivning i samma DB-transaktion.
+    const deliveryConsumer = await startDeliveryConsumer({
+      rabbit: ctx.rabbit,
+      service: createDeliveryService(sql),
+      logger,
+    });
+
     app.addHook("onClose", async () => {
       publisher.stop();
+      await deliveryConsumer.stop();
       await sql.end({ timeout: 5 });
     });
   },

@@ -27,6 +27,7 @@ import {
 import type { Sql, TransactionSql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { CompanySettingsRepository } from "../company-settings/repository";
+import type { CompanySettingsRow } from "../company-settings/types";
 import { addDays, todayInStockholm } from "../domain/dates";
 import { type LineAmounts, computeLine, sumTotals } from "../domain/vat";
 import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
@@ -92,16 +93,20 @@ export function createInvoiceService(sql: Sql) {
     return toDetail(row, items, paid);
   }
 
-  /** Tar radlåset på nummerserien och returnerar { number, ocr }. Anropa sent i tx:en. */
+  /**
+   * Tar radlåset på nummerserien och returnerar numret, OCR:et och den
+   * låsta company_settings-raden (som kreditvägen behöver för snapshoten).
+   * Anropa sent i tx:en så låset hålls kort.
+   */
   async function allocateNumber(
     ctx: RequestContext,
     tx: TransactionSql,
-  ): Promise<{ number: number; ocr: string }> {
+  ): Promise<{ number: number; ocr: string; settings: CompanySettingsRow }> {
     const settingsRepo = csRepo(ctx);
     const settings = await settingsRepo.lockForUpdate(tx);
     const number = settings.next_invoice_number;
     await settingsRepo.bumpInvoiceNumber(tx);
-    return { number, ocr: deriveOcr(number) };
+    return { number, ocr: deriveOcr(number), settings };
   }
 
   return {
@@ -311,8 +316,14 @@ export function createInvoiceService(sql: Sql) {
       }));
       const totals = sumTotals(creditItems.map(amountsOf));
 
-      // Kritisk sektion: nummerserien.
-      const { number, ocr } = await allocateNumber(ctx, tx);
+      // Kreditfakturan skickas till kunden som PDF (domain.md #35) och
+      // documents renderar ur snapshoten, aldrig de levande tabellerna —
+      // så kundraden behövs för adressblocket redan här.
+      const customer = await repo.findCustomerFull(original.customer_id, tx);
+      if (!customer) throw new BadRequest("Fakturans kund saknas");
+
+      // Kritisk sektion: nummerserien. settings används till snapshoten nedan.
+      const { number, ocr, settings } = await allocateNumber(ctx, tx);
 
       const today = todayInStockholm();
       const creditNote = await repo.insertInvoice(tx, {
@@ -331,6 +342,22 @@ export function createInvoiceService(sql: Sql) {
       });
       await repo.insertItems(tx, creditNote.id, creditItems);
       await repo.setStatus(tx, original.id, "credited");
+
+      // Frusen kopia för PDF-rendering (database.md #30), på samma form som
+      // send-vägen skriver. Läs tillbaka de nyss insatta raderna så
+      // snapshoten får exakt DB-formen (öre som öre), inte de negerade
+      // InsertItemData-talen.
+      const creditRows = await repo.findItems(tx, creditNote.id);
+      await repo.insertSnapshot(
+        tx,
+        creditNote.id,
+        buildSnapshotPayload({
+          invoice: creditNote,
+          items: creditRows,
+          company: settings,
+          customer,
+        }),
+      );
 
       await writeEvent(tx, {
         sourceService: SERVICE_NAME,
