@@ -5,11 +5,23 @@
 // den affärsevent-envelope som packages/contracts definierar, eftersom ett
 // ping inte är en affärshändelse och saknar tenant (se architecture.md).
 
-import amqplib, { type Channel, type ChannelModel, type ConsumeMessage } from "amqplib";
+import amqplib, {
+  type Channel,
+  type ChannelModel,
+  type ConfirmChannel,
+  type ConsumeMessage,
+} from "amqplib";
 
 export interface RabbitConnection {
   connection: ChannelModel;
   channel: Channel;
+  /**
+   * Confirm-kanal: `publish` returnerar först ett svar när brokern har
+   * bekräftat (eller nack:at) meddelandet. Outbox-publishern MÅSTE använda
+   * den här — en vanlig kanal är fire-and-forget, och en broker som tar
+   * emot TCP men tappar meddelandet ger tyst eventförlust.
+   */
+  confirmChannel: ConfirmChannel;
   /**
    * `false` så fort brokern stängt anslutningen eller kanalen, eller ett
    * anslutningsfel inträffat. `/health/ready` läser den här — amqplib har
@@ -20,9 +32,26 @@ export interface RabbitConnection {
   close(): Promise<void>;
 }
 
+/** Publicerar på confirm-kanalen och väntar på brokerns bekräftelse. */
+export function publishConfirmed(
+  channel: ConfirmChannel,
+  exchange: string,
+  routingKey: string,
+  content: Buffer,
+  options: Parameters<ConfirmChannel["publish"]>[3] = {},
+): Promise<void> {
+  return new Promise((resolve, reject) => {
+    channel.publish(exchange, routingKey, content, options, (err) => {
+      if (err) reject(err instanceof Error ? err : new Error("Broker nack:ade meddelandet"));
+      else resolve();
+    });
+  });
+}
+
 export async function connectRabbitMQ(url: string): Promise<RabbitConnection> {
   const connection = await amqplib.connect(url);
   const channel = await connection.createChannel();
+  const confirmChannel = await connection.createConfirmChannel();
 
   let healthy = true;
   const markUnhealthy = () => {
@@ -32,14 +61,18 @@ export async function connectRabbitMQ(url: string): Promise<RabbitConnection> {
   connection.on("error", markUnhealthy);
   channel.on("close", markUnhealthy);
   channel.on("error", markUnhealthy);
+  confirmChannel.on("close", markUnhealthy);
+  confirmChannel.on("error", markUnhealthy);
 
   return {
     connection,
     channel,
+    confirmChannel,
     isHealthy: () => healthy,
     async close() {
       healthy = false;
       await channel.close();
+      await confirmChannel.close();
       await connection.close();
     },
   };

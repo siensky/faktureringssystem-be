@@ -2,7 +2,7 @@
 // Varje tjänst listar de miljövariabler den kräver för att starta; saknas
 // någon kastas ett fel direkt vid uppstart i stället för att tjänsten
 // startar och kraschar oförklarligt på första request som råkar behöva
-// variabeln. code-style.md #26: konfiguration läses en gång vid uppstart
+// variabeln. code-style.md #28: konfiguration läses en gång vid uppstart
 // och valideras, ingen process.env utspridd i affärslogiken.
 
 export class MissingEnvError extends Error {

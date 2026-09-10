@@ -1,35 +1,106 @@
-// auth-tjänsten. Fas 0: allt gemensamt (health, RabbitMQ + system-ping,
-// CORS/helmet/bodyLimit/rate limiting, felhanterare) ligger i
-// startService() i @faktura/shared. Den här filen läser bara env och
-// startar. Affärslogik och egna routes tillkommer i respektive fas via
-// `configure`-hooken (code-style.md #2).
+// auth-tjänsten. startService() (i @faktura/shared) sköter allt gemensamt
+// bootstrap; configure-hooken nedan registrerar auth-modulens routes,
+// M2M- och BankID-modulerna och outbox-publishern.
 
 import {
   createLogger,
-  loadEnv,
-  loadEnvWithDefaults,
-  parseIntEnv,
+  createRequireService,
+  createRequireUser,
+  publishConfirmed,
   startService,
 } from "@faktura/shared";
+import { registerAuthRoutes } from "./auth/routes";
+import { createAuthService } from "./auth/services";
+import { MockBankIdProvider } from "./bankid/provider";
+import { registerBankIdRoutes } from "./bankid/routes";
+import { createBankIdService } from "./bankid/services";
+import { SERVICE_NAME, config } from "./config";
+import { sql } from "./db";
+import { registerInternalFixtures } from "./internal";
+import { registerM2mRoutes } from "./m2m/routes";
+import { createM2mService } from "./m2m/services";
+import { EVENTS_EXCHANGE, startOutboxPublisher } from "./outbox";
 
-const SERVICE_NAME = "auth";
 const logger = createLogger(SERVICE_NAME);
 
-// Kraschar direkt vid uppstart om något saknas — hellre ett tydligt fel i
-// loggen vid start än en tjänst som faller på första anropet (code-style.md #26).
-const env = loadEnv(["RABBITMQ_URL", "REDIS_URL"] as const);
-const { PORT, CORS_ORIGIN } = loadEnvWithDefaults({
-  PORT: "4001",
-  CORS_ORIGIN: "http://localhost:5173",
-});
+const strictLimit = {
+  config: { rateLimit: { max: config.strictRateLimitMax, timeWindow: "1 minute" } },
+};
+
+/** Finns tenanten och är den aktiv? Auth äger tabellen. */
+async function isTenantActive(tenantId: number): Promise<boolean> {
+  const [row] = await sql<{ status: string }[]>`
+    SELECT status FROM tenants WHERE id = ${tenantId} LIMIT 1
+  `;
+  return row?.status === "active";
+}
 
 startService({
   serviceName: SERVICE_NAME,
-  port: parseIntEnv("PORT", PORT),
-  rabbitmqUrl: env.RABBITMQ_URL,
-  redisUrl: env.REDIS_URL,
-  corsOrigins: CORS_ORIGIN.split(",").map((origin) => origin.trim()),
+  port: config.port,
+  rabbitmqUrl: config.rabbitmqUrl,
+  redisUrl: config.redisUrl,
+  corsOrigins: config.corsOrigins,
   logger,
+  extraReadinessChecks: [
+    {
+      name: "postgres",
+      check: async () => {
+        await sql`SELECT 1`;
+      },
+    },
+  ],
+  configure: async (app, ctx) => {
+    // "events"-exchanget deklareras av infra/rabbitmq/init.sh, inte här —
+    // tjänsten har ingen configure-behörighet på det.
+
+    const requireUser = createRequireUser(config.jwtUserSecret);
+    const requireService = createRequireService(config.jwtServiceSecret, {
+      checkTenantActive: isTenantActive,
+    });
+
+    const authService = createAuthService({ sql, redis: ctx.redis, config, logger });
+    registerAuthRoutes(app, authService, {
+      devEndpointsEnabled: config.devEndpointsEnabled,
+      strictRateLimitMax: config.strictRateLimitMax,
+    });
+
+    const m2mService = createM2mService({ sql, config });
+    registerM2mRoutes(app, m2mService, strictLimit);
+
+    // Fas 2: alltid mock. config vägrar starta med mock i produktion —
+    // RealBankIdProvider byggs i fas 11.
+    const bankIdService = createBankIdService({
+      sql,
+      redis: ctx.redis,
+      config,
+      provider: new MockBankIdProvider(ctx.redis),
+    });
+    registerBankIdRoutes(app, bankIdService, strictLimit);
+
+    registerInternalFixtures(app, { requireUser, requireService });
+
+    const publisher = startOutboxPublisher({
+      sql,
+      sourceService: SERVICE_NAME,
+      // Confirm-kanal: löser upp först när brokern bekräftat. Outboxen
+      // markerar published_at först då.
+      publish: (routingKey, envelope) =>
+        publishConfirmed(
+          ctx.rabbit.confirmChannel,
+          EVENTS_EXCHANGE,
+          routingKey,
+          Buffer.from(JSON.stringify(envelope)),
+          { contentType: "application/json", persistent: true },
+        ),
+      logger,
+    });
+
+    app.addHook("onClose", async () => {
+      publisher.stop();
+      await sql.end({ timeout: 5 });
+    });
+  },
 }).catch((error) => {
   logger.error({ err: error }, `${SERVICE_NAME} misslyckades att starta`);
   process.exit(1);

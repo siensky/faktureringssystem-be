@@ -32,6 +32,18 @@ services:
       retries: 10
       start_period: 5s
 
+  # Kör alla migrationer mot den gemensamma databasen och avslutar sig
+  # själv. Tjänster som rör databasen väntar på att den lyckats.
+  migrate:
+    build:
+      context: .
+      dockerfile: infra/migrate/Dockerfile
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+    depends_on:
+      db:
+        condition: service_healthy
+
   redis:
     image: redis:7-alpine
     container_name: invoice_redis
@@ -55,12 +67,14 @@ services:
       - "${RABBITMQ_MANAGEMENT_PORT}:15672"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
-      interval: 5s
-      timeout: 10s
-      # RabbitMQ tar ~12 s att starta kallt lokalt och kan vara långsammare
-      # på en CI-runner — generös start_period så starten inte blir flaky.
-      retries: 20
-      start_period: 45s
+      interval: 10s
+      timeout: 15s
+      # RabbitMQ tar 30-40 s att bli "check_running"-frisk kallt när hela
+      # stacken byggts och startar samtidigt. Generös start_period +
+      # start_interval (pollar tätt under uppstart) så starten inte blir flaky.
+      retries: 10
+      start_period: 90s
+      start_interval: 3s
 
   # Engångscontainer: skapar en RabbitMQ-användare per tjänst (se
   # infra/rabbitmq/init.sh) och avslutar sig själv. De fyra tjänsterna
@@ -137,9 +151,19 @@ services:
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
       LOG_LEVEL: ${LOG_LEVEL}
+      NODE_ENV: ${NODE_ENV:-development}
+      AUTH_DEV_ENDPOINTS: ${AUTH_DEV_ENDPOINTS:-false}
+      JWT_USER_SECRET: ${JWT_USER_SECRET}
+      AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
+      AUTH_STRICT_RATE_LIMIT_MAX: ${AUTH_STRICT_RATE_LIMIT_MAX:-10}
+      BANKID_PROVIDER: ${BANKID_PROVIDER:-mock}
+      JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
+      PNR_HMAC_KEY: ${PNR_HMAC_KEY}
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq-init:
@@ -167,6 +191,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq-init:
@@ -194,6 +220,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq-init:

@@ -1,11 +1,14 @@
 export * from "./errors";
 export { registerErrorHandler } from "./errors/handler";
 export { createLogger } from "./logger";
+export type { Logger } from "pino";
+export type { JsonValue, JsonObject } from "./json";
 export { loadEnv, loadEnvWithDefaults, parseIntEnv, MissingEnvError } from "./config";
 export { createDbClient, type DbClientOptions } from "./db";
 export {
   connectRabbitMQ,
   publishJson,
+  publishConfirmed,
   consumeJson,
   type RabbitConnection,
   type JsonMessageHandler,
@@ -18,6 +21,28 @@ export {
   type StartServiceOptions,
   type ServiceContext,
 } from "./service";
+export { TenantScopedRepository, type RequestContext } from "./repository";
+export {
+  signAccessToken,
+  verifyAccessToken,
+  USER_TOKEN,
+  createRequireUser,
+  contextOf,
+  resolveCorrelationId,
+  signServiceToken,
+  verifyServiceToken,
+  assertScope,
+  SERVICE_TOKEN,
+  createRequireService,
+  serviceContextOf,
+  requireTenantHeader,
+  getServiceToken,
+  type AccessTokenClaims,
+  type VerifiedServiceToken,
+  type ServiceContext as M2MServiceContext,
+  type TenantActiveCheck,
+  type ServiceTokenClientOptions,
+} from "./auth";
 export {
   encryptField,
   decryptField,

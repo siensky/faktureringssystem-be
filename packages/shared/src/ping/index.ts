@@ -2,7 +2,7 @@
 // RabbitMQ, innan någon affärslogik finns. Detta är INTE ett affärsevent —
 // det använder inte packages/contracts envelope (som kräver tenantId) utan
 // ett eget litet fanout-exchange. All logik ligger här, delad, i stället
-// för kopierad i auth/billing/payments (code-style.md #25).
+// för kopierad i auth/billing/payments (code-style.md #27).
 
 import type { Channel } from "amqplib";
 

@@ -1,0 +1,7 @@
+{
+  "name": "faktura-migrate",
+  "private": true,
+  "dependencies": {
+    "node-pg-migrate": "^8.0.4"
+  }
+}
