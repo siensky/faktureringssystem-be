@@ -56,9 +56,11 @@ services:
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "check_running"]
       interval: 5s
-      timeout: 5s
-      retries: 12
-      start_period: 15s
+      timeout: 10s
+      # RabbitMQ tar ~12 s att starta kallt lokalt och kan vara långsammare
+      # på en CI-runner — generös start_period så starten inte blir flaky.
+      retries: 20
+      start_period: 45s
 
   # Engångscontainer: skapar en RabbitMQ-användare per tjänst (se
   # infra/rabbitmq/init.sh) och avslutar sig själv. De fyra tjänsterna

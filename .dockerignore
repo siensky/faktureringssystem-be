@@ -1,5 +1,23 @@
-node_modules
-npm-debug.log
-dist
-.env
+# Byggkontexten är repo-roten för alla fyra tjänsterna. Håll den liten och
+# fri från allt som inte ska in i en image — bara det Dockerfilarna
+# uttryckligen COPY:ar hamnar i imagen ändå, men en stor kontext gör varje
+# build långsammare och kan råka skugga in lokala artefakter.
+
+**/node_modules
+**/.venv
+**/__pycache__
+**/*.pyc
+**/.pytest_cache
+**/.ruff_cache
+**/dist
+**/coverage
+**/*.tsbuildinfo
+
 .git
+.github
+.env
+*.log
+.DS_Store
+
+# Frontend-apparna byggs separat (fas 8/9), inte i tjänsternas images
+apps
