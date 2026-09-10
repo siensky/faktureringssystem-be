@@ -44,7 +44,7 @@ jobs:
       # hand, eller glömt köra codegen efter en schemaändring.
       - run: bun run codegen
       - run: git diff --exit-code -- packages/contracts/src/generated
-      - run: bun test
+      - run: bun test packages services
 
   unit-tests-python:
     runs-on: ubuntu-latest
@@ -128,6 +128,11 @@ jobs:
           MINIO_CONSOLE_PORT=9001
           MAILPIT_SMTP_PORT=1025
           MAILPIT_UI_PORT=8025
+          NODE_ENV=test
+          AUTH_DEV_ENDPOINTS=true
+          JWT_USER_SECRET=ci_jwt_user_secret_not_a_real_secret_0000000000
+          AUTH_TOKEN_PEPPER=00000000000000000000000000000000000000000000000000000000000000ff
+          AUTH_STRICT_RATE_LIMIT_MAX=5000
           ENVEOF
 
       - name: Bygg alla images
@@ -171,6 +176,16 @@ jobs:
         run: |
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/internal/debug/pings-seen)" = "404"
+
+      - name: Auth fas 1 e2e (mot den uppe stacken)
+        env:
+          RUN_E2E: "1"
+          AUTH_URL: http://localhost:4001
+          E2E_DATABASE_URL: postgresql://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5434/${{ env.DB_NAME }}
+          E2E_RABBITMQ_URL: amqp://ci_admin:ci_password_not_secret@localhost:5672
+        run: |
+          bun install --frozen-lockfile
+          bun test e2e
 
       - name: Skriv ut loggar vid fel
         if: failure()

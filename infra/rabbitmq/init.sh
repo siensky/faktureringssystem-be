@@ -27,10 +27,13 @@ echo "RabbitMQ är uppe. Skapar tjänstekonton."
 create_user() {
   name="$1"
   password="$2"
-  # Konfigurerar det delade system.ping-exchanget och sin EGEN köpar
-  # "system.ping.<namn>" (fas 0) — inget annat. Listan växer när riktiga
-  # affärsexchanges tillkommer i senare faser: en explicit, granskningsbar
-  # rad per tjänst, inte ett brett "allow all".
+  # Varje tjänst får:
+  #   - system.ping + sin egen system.ping.<namn>-kö  (fas 0, infra-diagnostik)
+  #   - "events"                                       (fas 1, det delade topic-exchanget för affärshändelser)
+  #   - sina egna konsumentköer "<namn>.*"             (bind + consume)
+  # En explicit, granskningsbar rad per tjänst — inte ett brett "allow all".
+  # "events" är delat på samma sätt som system.ping: en topic-buss flera
+  # tjänster legitimt publicerar till och konsumerar från.
   curl -sf -u "$AUTH" -X PUT "$API/users/$name" \
     -H "Content-Type: application/json" \
     -d "{\"password\":\"$password\",\"tags\":\"\"}" > /dev/null
@@ -48,7 +51,8 @@ create_user() {
   # fel antal till JSON-payloaden. Mallen skriver den bokstavliga JSON-
   # texten en gång, oavbrutet, och sed byter bara ut __NAME__ mot tjänstens
   # namn.
-  permissions_json=$(printf '%s' '{"configure":"^system\\.ping(\\.__NAME__)?$","write":"^system\\.ping(\\.__NAME__)?$","read":"^system\\.ping(\\.__NAME__)?$"}' | sed "s/__NAME__/$name/g")
+  pattern='^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$'
+  permissions_json=$(printf '%s' "{\"configure\":\"$pattern\",\"write\":\"$pattern\",\"read\":\"$pattern\"}" | sed "s/__NAME__/$name/g")
 
   curl -sf -u "$AUTH" -X PUT "$API/permissions/%2F/$name" \
     -H "Content-Type: application/json" \
