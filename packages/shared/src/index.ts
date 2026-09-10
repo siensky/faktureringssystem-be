@@ -14,6 +14,14 @@ export {
   type JsonMessageHandler,
 } from "./rabbitmq";
 export { registerHealthRoutes, type ReadinessCheck } from "./health";
+export {
+  writeEvent,
+  startOutboxPublisher,
+  backoffSeconds,
+  EVENTS_EXCHANGE,
+  type WriteEventInput,
+  type OutboxPublisher,
+} from "./outbox";
 export { startSystemPing, PING_EXCHANGE, type PingState, type PingMessage } from "./ping";
 export { createRedisClient } from "./redis";
 export {
@@ -43,6 +51,14 @@ export {
   type TenantActiveCheck,
   type ServiceTokenClientOptions,
 } from "./auth";
+export { deriveOcr, isValidOcr } from "./ocr";
+export {
+  normalizePnr,
+  isValidPnr,
+  isValidOrgNumber,
+  isValidBankgiro,
+  luhn,
+} from "./swedish-id";
 export {
   encryptField,
   decryptField,

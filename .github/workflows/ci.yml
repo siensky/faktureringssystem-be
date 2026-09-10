@@ -183,13 +183,15 @@ jobs:
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/health)" = "200"
           test "$(curl -s -o /dev/null -w '%{http_code}' http://localhost:8080/internal/debug/pings-seen)" = "404"
 
-      - name: Auth fas 1 e2e (mot den uppe stacken)
+      - name: e2e (auth + M2M + billing, mot den uppe stacken)
         env:
           RUN_E2E: "1"
           AUTH_URL: http://localhost:4001
+          BILLING_URL: http://localhost:4002
           E2E_DATABASE_URL: postgresql://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5434/${{ env.DB_NAME }}
           E2E_RABBITMQ_URL: amqp://ci_admin:ci_password_not_secret@localhost:5672
           E2E_PNR_HMAC_KEY: 000000000000000000000000000000000000000000000000000000000000abcd
+          E2E_PNR_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"
         run: |
           bun install --frozen-lockfile
           bun test --timeout 30000 e2e

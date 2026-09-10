@@ -188,6 +188,15 @@ services:
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
       LOG_LEVEL: ${LOG_LEVEL}
+      NODE_ENV: ${NODE_ENV:-development}
+      # Verifierar användar-JWT (aud: api) och tjänste-JWT (aud: internal) —
+      # samma hemligheter som auth SIGNERAR med (HS256, planens Säkerhet).
+      JWT_USER_SECRET: ${JWT_USER_SECRET}
+      JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
+      # Personnummer för privatkunder: kryptering + HMAC-uppslag, två skilda
+      # nycklar. PNR_HMAC_KEY delas med auth så BankID kan slå upp kunden.
+      PNR_ENCRYPTION_KEY: ${PNR_ENCRYPTION_KEY}
+      PNR_HMAC_KEY: ${PNR_HMAC_KEY}
     depends_on:
       db:
         condition: service_healthy

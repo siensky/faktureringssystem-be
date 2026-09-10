@@ -94,6 +94,16 @@ startService({
           { contentType: "application/json", persistent: true },
         ),
       logger,
+      onDeadLetter: (row, error) => {
+        // Publishern ärver MAX_ATTEMPTS + dead-letter från @faktura/shared
+        // (härdad i fas 3). Utan den här haken skulle t.ex. tenant.created
+        // kunna överges permanent med bara en logg-rad. Fas 7 kopplar den
+        // till en riktig larmkanal; tills dess är error-loggen larmet.
+        logger.error(
+          { err: error, eventId: row.eventId, eventType: row.eventType },
+          "LARM: auth-event dead-letter:at efter maxantal försök",
+        );
+      },
     });
 
     app.addHook("onClose", async () => {
