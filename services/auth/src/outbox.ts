@@ -61,7 +61,12 @@ export interface OutboxPublisher {
 export function startOutboxPublisher(opts: {
   sql: Sql;
   sourceService: string;
-  publish: (routingKey: string, envelope: EventEnvelope) => void;
+  /**
+   * Publicerar och löser upp FÖRST när brokern bekräftat. Måste gå via en
+   * confirm-kanal — annars kan en broker som tar emot TCP men tappar
+   * meddelandet ge tyst eventförlust, exakt det outboxen ska förhindra.
+   */
+  publish: (routingKey: string, envelope: EventEnvelope) => Promise<void>;
   logger: Logger;
 }): OutboxPublisher {
   const { sql, sourceService, publish, logger } = opts;
@@ -95,7 +100,7 @@ export function startOutboxPublisher(opts: {
           };
           try {
             assertValidEnvelope(envelope);
-            publish(row.event_type, envelope);
+            await publish(row.event_type, envelope); // väntar på brokerns confirm
             await tx`UPDATE event_outbox SET published_at = now() WHERE event_id = ${row.event_id}`;
           } catch (error) {
             const step = Math.min(row.attempts + 1, MAX_BACKOFF_STEPS);

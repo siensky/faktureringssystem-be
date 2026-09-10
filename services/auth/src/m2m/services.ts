@@ -1,12 +1,22 @@
 // OAuth2 client_credentials: utfärda ett tjänste-token. Endast de scopes
 // klienten både begär OCH har i allowed_scopes beviljas (architecture.md
-// #18, minsta möjliga scope). Begärs inget scope beviljas alla tillåtna.
+// #18, minsta möjliga scope). `scope` är OBLIGATORISKT — en klient som
+// utelämnar det ska INTE få allt, den ska få ett fel.
 
-import { SERVICE_TOKEN, Unauthorized, signServiceToken } from "@faktura/shared";
+import { BadRequest, SERVICE_TOKEN, Unauthorized, signServiceToken } from "@faktura/shared";
+
 import type { Sql } from "postgres";
 import type { config as Config } from "../config";
 import { verifyPassword } from "../passwords";
 import { createM2mRepository } from "./repository";
+
+/**
+ * Skärningen mellan begärda och tillåtna scopes (architecture.md #18).
+ * Ren funktion, enhetstestad separat.
+ */
+export function resolveGrantedScopes(requested: string[], allowed: string[]): string[] {
+  return requested.filter((s) => allowed.includes(s));
+}
 
 export function createM2mService(deps: { sql: Sql; config: typeof Config }) {
   const repo = createM2mRepository(deps.sql);
@@ -25,10 +35,15 @@ export function createM2mService(deps: { sql: Sql; config: typeof Config }) {
       }
 
       const requested = requestedScope?.split(" ").filter(Boolean) ?? [];
-      const granted =
-        requested.length === 0
-          ? client.allowed_scopes
-          : requested.filter((s) => client.allowed_scopes.includes(s));
+      if (requested.length === 0) {
+        throw new BadRequest("scope krävs (mellanslagsseparerad lista)");
+      }
+      const granted = resolveGrantedScopes(requested, client.allowed_scopes);
+      if (granted.length === 0) {
+        // Alla begärda scopes nekades -> invalid_scope, inte ett token med
+        // tom scope.
+        throw new BadRequest("invalid_scope: inget av de begärda scopen är tillåtet");
+      }
 
       const accessToken = await signServiceToken(
         { clientId: client.client_id, scope: granted.join(" ") },

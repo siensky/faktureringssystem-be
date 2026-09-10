@@ -9,10 +9,10 @@ export function registerBankIdRoutes(
   strictLimit: object,
 ): void {
   const c = createBankIdControllers(service);
+  // init: hårt per-IP-tak (kostnadsyta) + windowed rate-limit i servicen.
   app.post("/auth/bankid/init", { schema: { body: schema.initBody }, ...strictLimit }, c.init);
-  app.post(
-    "/auth/bankid/collect",
-    { schema: { body: schema.collectBody }, ...strictLimit },
-    c.collect,
-  );
+  // collect: MÅSTE kunna pollas ofta (var ~2:a sekund i upp till ~3 min).
+  // Bara det globala taket gäller — den är billig och kräver ett orderRef
+  // som bara init (rate-limitad) kan ge.
+  app.post("/auth/bankid/collect", { schema: { body: schema.collectBody } }, c.collect);
 }

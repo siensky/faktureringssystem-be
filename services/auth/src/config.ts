@@ -1,5 +1,5 @@
 // All auth-specifik konfiguration läses EN gång här och valideras vid
-// uppstart (code-style.md #26). Saknas en obligatorisk variabel kraschar
+// uppstart (code-style.md #28). Saknas en obligatorisk variabel kraschar
 // tjänsten direkt med ett tydligt fel i stället för att falla på första
 // requesten som råkar behöva den.
 
@@ -24,6 +24,7 @@ const optional = loadEnvWithDefaults({
   EMAIL_VERIFICATION_TTL_HOURS: "24",
   PASSWORD_RESET_TTL_HOURS: "1",
   AUTH_STRICT_RATE_LIMIT_MAX: "10",
+  BANKID_PROVIDER: "mock",
 });
 
 export const config = {
@@ -52,6 +53,16 @@ export const config = {
     "AUTH_STRICT_RATE_LIMIT_MAX",
     optional.AUTH_STRICT_RATE_LIMIT_MAX,
   ),
+  bankIdProvider: optional.BANKID_PROVIDER,
 } as const;
+
+// BankID-mocken tar personnumret ur request-bodyn och returnerar det som
+// signerat — total auth-bypass. Den får ALDRIG köras i produktion. Samma
+// disciplin som dev-endpoints. RealBankIdProvider byggs i fas 11.
+if (config.isProduction && config.bankIdProvider !== "real") {
+  throw new Error(
+    "BANKID_PROVIDER måste vara 'real' i produktion — mocken är en total auth-bypass",
+  );
+}
 
 export const SERVICE_NAME = "auth";

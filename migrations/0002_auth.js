@@ -5,9 +5,10 @@
  * som fortfarande kan röra sig (status, roll, token-typ), inte Postgres
  * ENUM som är trögt att ändra.
  *
- * customer_id på users och token-typen 'customer_invite' hör till
- * kundportalen och läggs till i fas 4 tillsammans med customers-tabellen —
- * fas 1 har bara admins.
+ * customer_id på users hör till kundportalen (fas 4). Token-typen
+ * 'customer_invite' finns med i CHECK:en redan nu — CHECK-värden går inte
+ * att lägga till i efterhand utan DROP/ADD på en körd tabell (database.md
+ * #2), samma skäl som event_outbox skrevs "färdig från början".
  *
  * @type {import('node-pg-migrate').ColumnDefinitions | undefined}
  */
@@ -61,7 +62,7 @@ export const up = (pgm) => {
       id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
       tenant_id   INTEGER NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
       user_id     INTEGER NOT NULL REFERENCES users (id) ON DELETE CASCADE,
-      token_type  TEXT NOT NULL CHECK (token_type IN ('refresh', 'email_verification', 'password_reset')),
+      token_type  TEXT NOT NULL CHECK (token_type IN ('refresh', 'email_verification', 'password_reset', 'customer_invite')),
       token_hash  TEXT NOT NULL UNIQUE,
       expires_at  TIMESTAMPTZ NOT NULL,
       used_at     TIMESTAMPTZ,

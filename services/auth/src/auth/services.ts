@@ -82,15 +82,16 @@ export function createAuthService(deps: Deps) {
   return {
     async register(input: RegisterInput, correlationId?: string) {
       const email = norm(input.email);
+      // Hashen görs ALLTID (dominerar svarstiden), oavsett utfall — så en
+      // upptagen e-post inte kan skiljas från en ledig på timing.
       const passwordHash = await hashPassword(input.password);
 
-      const taken =
-        (await repo.findUserByEmailAnyMethod(email)) !== undefined ||
-        (await repo.orgNumberExists(input.orgNumber));
-
-      // Enumeringssäkert: samma svar oavsett om e-post/orgnr redan finns.
-      // Vi skapar bara om det är fritt.
-      if (!taken) {
+      try {
+        // Ingen förhandskoll: försök insert:en direkt i transaktionen och
+        // fånga unique-violation. En TOCTOU-koll utanför transaktionen gör
+        // att två samtidiga registreringar på samma e-post ger 500 för den
+        // andra — vilket är precis den enumeringssignal konstruktionen ska
+        // ta bort.
         await sql.begin(async (tx) => {
           const { tenantId, userId } = await repo.insertTenantAndAdmin(tx, {
             companyName: input.companyName,
@@ -121,11 +122,14 @@ export function createAuthService(deps: Deps) {
             correlationId,
           });
         });
-      } else {
-        logger.info(
-          { email: "[present]" },
-          "register: e-post eller orgnr redan taget, ingen åtgärd",
-        );
+      } catch (error) {
+        // 23505 = unique_violation (e-post eller org_number redan taget).
+        // Enumeringssäkert: samma OK-svar som vid en lyckad registrering.
+        if ((error as { code?: string }).code === "23505") {
+          logger.info({}, "register: e-post eller orgnr redan taget, ingen åtgärd");
+        } else {
+          throw error;
+        }
       }
 
       return OK;
@@ -137,7 +141,11 @@ export function createAuthService(deps: Deps) {
         throw new BadRequest("Ogiltig eller utgången token");
       }
       await sql.begin(async (tx) => {
-        await repo.markTokenUsed(tx, row.id);
+        // markTokenUsed har `AND used_at IS NULL` — 0 rader betyder att en
+        // parallell request hann förbruka token först.
+        if ((await repo.markTokenUsed(tx, row.id)) === 0) {
+          throw new BadRequest("Ogiltig eller utgången token");
+        }
         await repo.setEmailVerified(tx, row.user_id);
       });
       return OK;
@@ -182,7 +190,13 @@ export function createAuthService(deps: Deps) {
       await assertTenantActive(user.tenant_id);
 
       const newRefresh = await sql.begin(async (tx) => {
-        await repo.markTokenUsed(tx, row.id);
+        // Rotationen är atomär: markera förbrukat OCH utfärda nytt i samma
+        // transaktion. markTokenUsed 0 rader = en parallell /refresh hann
+        // först — behandla som återanvändning och avsluta alla sessioner.
+        if ((await repo.markTokenUsed(tx, row.id)) === 0) {
+          await repo.revokeTokens(tx, row.user_id, "refresh");
+          throw new Unauthorized("Token återanvänt — alla sessioner avslutade");
+        }
         return issueTokenRow(user.id, user.tenant_id, "refresh", config.refreshTtlSeconds, tx);
       });
       const accessToken = await signAccessToken(
@@ -240,7 +254,10 @@ export function createAuthService(deps: Deps) {
       }
       const passwordHash = await hashPassword(newPassword);
       await sql.begin(async (tx) => {
-        await repo.markTokenUsed(tx, row.id);
+        // 0 rader = en parallell reset hann konsumera länken först.
+        if ((await repo.markTokenUsed(tx, row.id)) === 0) {
+          throw new BadRequest("Ogiltig eller utgången token");
+        }
         await repo.updatePassword(tx, row.user_id, passwordHash);
         // Lösenordsbyte ogiltigförklarar alla sessioner och andra
         // återställningslänkar (planens fas 1-beskrivning).
@@ -270,9 +287,6 @@ export function createAuthService(deps: Deps) {
       const token = await issueTokenRow(user.id, user.tenant_id, type, ttlFor(type));
       return { token };
     },
-
-    // Exponeras för verifieringstester.
-    _repo: repo,
   };
 }
 

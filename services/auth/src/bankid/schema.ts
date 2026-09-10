@@ -1,10 +1,12 @@
+// Personnummer: 10–13 siffror (ÅÅ)ÅÅMMDDNNNN, valfritt bindestreck utelämnat.
+// Mock-provider-sentinelerna (se provider.ts) är valida siffersträngar och
+// läcker inte in i det publika kontraktet.
 export const initBody = {
   type: "object",
   additionalProperties: false,
   required: ["personalNumber"],
   properties: {
-    // Svenskt personnummer, 12 siffror (ÅÅÅÅMMDDNNNN) eller mock-värdena.
-    personalNumber: { type: "string", minLength: 6, maxLength: 13 },
+    personalNumber: { type: "string", pattern: "^[0-9]{10,13}$" },
   },
 } as const;
 

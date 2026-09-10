@@ -1,7 +1,7 @@
 // Lösenordshashning och token-hashning.
 //
 // Lösenord: Bun.password (argon2id) — inbyggt i runtimen, noll beroenden
-// (code-style.md #20, #28: tråkiga lösningen). Bun.password.verify är
+// (code-style.md #20 + #30: tråkiga lösningen). Bun.password.verify är
 // konstant-tid.
 //
 // Refresh- och engångstokens är hög-entropi slumpvärden, inte lösenord —

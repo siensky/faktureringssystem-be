@@ -40,3 +40,18 @@ export async function recordLoginFailure(redis: Redis, email: string): Promise<v
 export async function clearLoginFailures(redis: Redis, email: string): Promise<void> {
   await redis.del(counterKey(email), lockoutKey(email));
 }
+
+// ── Enkel windowed rate-limit (för t.ex. BankID-init som är en kostnadsyta
+//    snarare än en gissningsyta) ──────────────────────────────────────────
+
+const INIT_WINDOW_SECONDS = 60;
+const INIT_MAX_PER_WINDOW = 10;
+
+export async function assertInitRate(redis: Redis, scopeKey: string): Promise<void> {
+  const key = `auth:init-rate:${scopeKey}`;
+  const n = await redis.incr(key);
+  if (n === 1) await redis.expire(key, INIT_WINDOW_SECONDS);
+  if (n > INIT_MAX_PER_WINDOW) {
+    throw new TooManyRequests("För många försök, försök igen om en stund");
+  }
+}

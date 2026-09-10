@@ -8,7 +8,7 @@ import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import type { config as Config } from "../config";
 import { createSessionIssuer } from "../session";
-import { assertNotLockedOut, recordLoginFailure } from "../throttle";
+import { assertInitRate, recordLoginFailure } from "../throttle";
 import type { BankIdProvider, CollectResult } from "./provider";
 import { createBankIdRepository } from "./repository";
 
@@ -25,12 +25,13 @@ export function createBankIdService(deps: Deps) {
 
   return {
     async init(personalNumber: string, endUserIp: string) {
-      // Strypning per IP och per personnummer — BankID-init är en
-      // kostnadsyta (planens Rate limiting-avsnitt).
-      await assertNotLockedOut(deps.redis, `bankid:${endUserIp}`);
-      await assertNotLockedOut(
+      // Windowed rate-limit per IP OCH per personnummer — BankID-init är en
+      // kostnadsyta (planens Rate limiting-avsnitt). Båda nycklarna
+      // inkrementeras vid varje anrop.
+      await assertInitRate(deps.redis, `bankid-init:ip:${endUserIp}`);
+      await assertInitRate(
         deps.redis,
-        `bankid:${hmacField(personalNumber, deps.config.pnrHmacKey)}`,
+        `bankid-init:pnr:${hmacField(personalNumber, deps.config.pnrHmacKey)}`,
       );
       const { orderRef, autoStartToken, qrData } = await deps.provider.init({
         personalNumber,

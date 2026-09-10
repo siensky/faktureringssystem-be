@@ -1,11 +1,12 @@
 // auth-tjänsten. startService() (i @faktura/shared) sköter allt gemensamt
 // bootstrap; configure-hooken nedan registrerar auth-modulens routes,
-// M2M- och BankID-modulerna, events-exchanget och outbox-publishern.
+// M2M- och BankID-modulerna och outbox-publishern.
 
 import {
   createLogger,
   createRequireService,
   createRequireUser,
+  publishConfirmed,
   startService,
 } from "@faktura/shared";
 import { registerAuthRoutes } from "./auth/routes";
@@ -26,6 +27,14 @@ const strictLimit = {
   config: { rateLimit: { max: config.strictRateLimitMax, timeWindow: "1 minute" } },
 };
 
+/** Finns tenanten och är den aktiv? Auth äger tabellen. */
+async function isTenantActive(tenantId: number): Promise<boolean> {
+  const [row] = await sql<{ status: string }[]>`
+    SELECT status FROM tenants WHERE id = ${tenantId} LIMIT 1
+  `;
+  return row?.status === "active";
+}
+
 startService({
   serviceName: SERVICE_NAME,
   port: config.port,
@@ -42,10 +51,13 @@ startService({
     },
   ],
   configure: async (app, ctx) => {
-    await ctx.rabbit.channel.assertExchange(EVENTS_EXCHANGE, "topic", { durable: true });
+    // "events"-exchanget deklareras av infra/rabbitmq/init.sh, inte här —
+    // tjänsten har ingen configure-behörighet på det.
 
     const requireUser = createRequireUser(config.jwtUserSecret);
-    const requireService = createRequireService(config.jwtServiceSecret);
+    const requireService = createRequireService(config.jwtServiceSecret, {
+      checkTenantActive: isTenantActive,
+    });
 
     const authService = createAuthService({ sql, redis: ctx.redis, config, logger });
     registerAuthRoutes(app, authService, {
@@ -56,6 +68,8 @@ startService({
     const m2mService = createM2mService({ sql, config });
     registerM2mRoutes(app, m2mService, strictLimit);
 
+    // Fas 2: alltid mock. config vägrar starta med mock i produktion —
+    // RealBankIdProvider byggs i fas 11.
     const bankIdService = createBankIdService({
       sql,
       redis: ctx.redis,
@@ -69,14 +83,16 @@ startService({
     const publisher = startOutboxPublisher({
       sql,
       sourceService: SERVICE_NAME,
-      publish: (routingKey, envelope) => {
-        ctx.rabbit.channel.publish(
+      // Confirm-kanal: löser upp först när brokern bekräftat. Outboxen
+      // markerar published_at först då.
+      publish: (routingKey, envelope) =>
+        publishConfirmed(
+          ctx.rabbit.confirmChannel,
           EVENTS_EXCHANGE,
           routingKey,
           Buffer.from(JSON.stringify(envelope)),
           { contentType: "application/json", persistent: true },
-        );
-      },
+        ),
       logger,
     });
 

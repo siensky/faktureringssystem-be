@@ -47,11 +47,6 @@ export function createAuthRepository(sql: Sql) {
       return row?.status;
     },
 
-    async orgNumberExists(orgNumber: string): Promise<boolean> {
-      const [row] = await sql`SELECT 1 FROM tenants WHERE org_number = ${orgNumber} LIMIT 1`;
-      return row !== undefined;
-    },
-
     /** Skapar tenant + första admin i en transaktion. Returnerar user-id. */
     async insertTenantAndAdmin(
       tx: TransactionSql,
@@ -97,8 +92,12 @@ export function createAuthRepository(sql: Sql) {
       return row;
     },
 
-    async markTokenUsed(db: Db, id: string): Promise<void> {
-      await db`UPDATE user_tokens SET used_at = now() WHERE id = ${id} AND used_at IS NULL`;
+    /** Returnerar antalet rader som faktiskt markerades (0 = redan använt). */
+    async markTokenUsed(db: Db, id: string): Promise<number> {
+      const res = await db`
+        UPDATE user_tokens SET used_at = now() WHERE id = ${id} AND used_at IS NULL
+      `;
+      return res.count;
     },
 
     /** Ogiltigförklarar alla oanvända tokens av en typ för en användare. */
@@ -117,12 +116,6 @@ export function createAuthRepository(sql: Sql) {
       await db`
         UPDATE users SET password_hash = ${passwordHash}, updated_at = now() WHERE id = ${userId}
       `;
-    },
-
-    /** Endast för tester/verifiering. */
-    async countTenants(): Promise<number> {
-      const [row] = await sql<{ count: string }[]>`SELECT count(*)::text AS count FROM tenants`;
-      return Number(row?.count ?? 0);
     },
   };
 }
