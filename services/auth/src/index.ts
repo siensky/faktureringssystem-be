@@ -1,35 +1,59 @@
-// auth-tjänsten. Fas 0: allt gemensamt (health, RabbitMQ + system-ping,
-// CORS/helmet/bodyLimit/rate limiting, felhanterare) ligger i
-// startService() i @faktura/shared. Den här filen läser bara env och
-// startar. Affärslogik och egna routes tillkommer i respektive fas via
-// `configure`-hooken (code-style.md #2).
+// auth-tjänsten. startService() (i @faktura/shared) sköter allt gemensamt
+// bootstrap; configure-hooken nedan registrerar auth-modulens egna routes,
+// events-exchanget och outbox-publishern.
 
-import {
-  createLogger,
-  loadEnv,
-  loadEnvWithDefaults,
-  parseIntEnv,
-  startService,
-} from "@faktura/shared";
+import { createLogger, startService } from "@faktura/shared";
+import { registerAuthRoutes } from "./auth/routes";
+import { createAuthService } from "./auth/services";
+import { SERVICE_NAME, config } from "./config";
+import { sql } from "./db";
+import { EVENTS_EXCHANGE, startOutboxPublisher } from "./outbox";
 
-const SERVICE_NAME = "auth";
 const logger = createLogger(SERVICE_NAME);
-
-// Kraschar direkt vid uppstart om något saknas — hellre ett tydligt fel i
-// loggen vid start än en tjänst som faller på första anropet (code-style.md #26).
-const env = loadEnv(["RABBITMQ_URL", "REDIS_URL"] as const);
-const { PORT, CORS_ORIGIN } = loadEnvWithDefaults({
-  PORT: "4001",
-  CORS_ORIGIN: "http://localhost:5173",
-});
 
 startService({
   serviceName: SERVICE_NAME,
-  port: parseIntEnv("PORT", PORT),
-  rabbitmqUrl: env.RABBITMQ_URL,
-  redisUrl: env.REDIS_URL,
-  corsOrigins: CORS_ORIGIN.split(",").map((origin) => origin.trim()),
+  port: config.port,
+  rabbitmqUrl: config.rabbitmqUrl,
+  redisUrl: config.redisUrl,
+  corsOrigins: config.corsOrigins,
   logger,
+  extraReadinessChecks: [
+    {
+      name: "postgres",
+      check: async () => {
+        await sql`SELECT 1`;
+      },
+    },
+  ],
+  configure: async (app, ctx) => {
+    await ctx.rabbit.channel.assertExchange(EVENTS_EXCHANGE, "topic", { durable: true });
+
+    const service = createAuthService({ sql, redis: ctx.redis, config, logger });
+    registerAuthRoutes(app, service, {
+      devEndpointsEnabled: config.devEndpointsEnabled,
+      strictRateLimitMax: config.strictRateLimitMax,
+    });
+
+    const publisher = startOutboxPublisher({
+      sql,
+      sourceService: SERVICE_NAME,
+      publish: (routingKey, envelope) => {
+        ctx.rabbit.channel.publish(
+          EVENTS_EXCHANGE,
+          routingKey,
+          Buffer.from(JSON.stringify(envelope)),
+          { contentType: "application/json", persistent: true },
+        );
+      },
+      logger,
+    });
+
+    app.addHook("onClose", async () => {
+      publisher.stop();
+      await sql.end({ timeout: 5 });
+    });
+  },
 }).catch((error) => {
   logger.error({ err: error }, `${SERVICE_NAME} misslyckades att starta`);
   process.exit(1);
