@@ -33,7 +33,7 @@
 17. **Index på `tenant_id`** i varje tenant-ägd tabell — varje query filtrerar på det.
 18. **Unika constraints är per tenant**, inte globala: `UNIQUE (tenant_id, ocr_number)`, `UNIQUE (tenant_id, invoice_number)`. Globalt unikt får två orelaterade företag att konkurrera om samma nummer.
 19. **Constraints i databasen, inte bara i koden.** Kan databasen garantera en regel ska den göra det — `CHECK`, `UNIQUE`, `FOREIGN KEY`. Appkoden har buggar; en constraint har det inte.
-20. **`ON DELETE` väljs medvetet.** `CASCADE` för sådant som saknar mening utan sin förälder (fakturarader), `RESTRICT` för sådant som aldrig får försvinna under fötterna på något (kund med fakturor).
+20. **`ON DELETE` väljs medvetet.** `CASCADE` för sådant som saknar mening utan sin förälder (fakturarader — `invoice_items` mot `invoices`), `RESTRICT` för sådant som aldrig får försvinna under fötterna på en bokföringspost (`invoices` och `invoice_templates` mot `customers`, `invoice_payments` mot `invoices`). `RESTRICT` mot kund är avsiktligt kopplat till att en kund med fakturor anonymiseras i stället för att raderas (`domain.md` #21).
 21. **Lägg index när en query behöver det**, inte i förväg. Ett oanvänt index kostar vid varje skrivning.
 
 ## Queries
@@ -48,3 +48,9 @@
 26. **`event_outbox` och `processed_events` är en tabell var**, inte en per tjänst. `source_service` respektive `consumer` skiljer raderna åt.
 27. **Publishern plockar rader med `FOR UPDATE SKIP LOCKED`** filtrerat på sin egen `source_service`. Då kan flera tjänsters publishers arbeta mot samma tabell utan att blockera varandra.
 28. **`event_outbox` bär hela livscykeln som kolumner:** `attempts`, `next_attempt_at`, `last_error`, `published_at`, `failed_at` (dead-letter). Ett **partiellt index** `WHERE published_at IS NULL AND failed_at IS NULL` — annars växer publisherns skanning monotont med hela historiken. `event_id` är `UUID`-PK satt när raden skrivs (samma id följer med vid en omsänd leverans, vilket är det som gör konsumentens dedup möjlig).
+
+
+## Fas 3 — billing
+
+29. **`paid_ore` lagras aldrig som kolumn.** Det beräknas som `SUM(invoice_payments.amount_ore)` per faktura. Samma skäl som `domain.md` #11 ger för restskuld, fast över en tjänstegräns: ett dubbellevererat `payment.matched` skulle öka en lagrad kolumn två gånger och göra en halvbetald faktura `paid`. `invoice_payments` har `UNIQUE (tenant_id, payment_id)` så en dubblett blir en unique-violation i stället för ett tyst felaktigt saldo. En cachad kolumn läggs till först om något mäts som för långsamt (`architecture.md` #22).
+30. **Snapshoten (`invoice_snapshots`) är en frusen `JSONB`-kopia** av företagsuppgifter, kundadress, rader och summor som de såg ut vid utskick. Documents renderar PDF ur den, aldrig de levande tabellerna, så en senare ändring i `company_settings` inte ändrar en redan bokförd faktura. Beloppen i snapshoten är kvar i öre — den är en intern post, inte ett API-svar.
