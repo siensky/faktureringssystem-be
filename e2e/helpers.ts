@@ -60,6 +60,43 @@ export function newOrgNumber(): string {
   return `55${Math.floor(1e8 + Math.random() * 8e8)}`;
 }
 
+/** Luhn-kontrollsiffra så att `digits + retur` blir mod-10-giltigt. */
+export function luhnCheck(digits: string): string {
+  let sum = 0;
+  let double = true; // sista siffran i `digits` dubblas när kontrollsiffran läggs till
+  for (let i = digits.length - 1; i >= 0; i--) {
+    let d = digits.charCodeAt(i) - 48;
+    if (double) {
+      d *= 2;
+      if (d > 9) d -= 9;
+    }
+    sum += d;
+    double = !double;
+  }
+  return String((10 - (sum % 10)) % 10);
+}
+
+/** Giltigt 12-siffrigt personnummer (Luhn över de 10 sista, rimligt datum). */
+export function validPnr(): string {
+  const day = String(1 + Math.floor(Math.random() * 27)).padStart(2, "0");
+  const body = `19900${1 + Math.floor(Math.random() * 8)}${day}${Math.floor(
+    100 + Math.random() * 900,
+  )}`; // YYYYMMDDNNN, 11 siffror
+  return body + luhnCheck(body.slice(2));
+}
+
+/** Giltigt 10-siffrigt organisationsnummer (Luhn mod-10). */
+export function validOrgNumber(): string {
+  const body = `556${Math.floor(100000 + Math.random() * 900000)}`; // 9 siffror
+  return body + luhnCheck(body);
+}
+
+/** Giltigt 8-siffrigt bankgironummer (Luhn mod-10). */
+export function validBankgiro(): string {
+  const body = String(Math.floor(1000000 + Math.random() * 8000000)); // 7 siffror
+  return body + luhnCheck(body);
+}
+
 /** Registrerar, verifierar och loggar in en admin. Returnerar token-paret. */
 export async function registerVerifyLogin(email: string): Promise<{
   accessToken: string;

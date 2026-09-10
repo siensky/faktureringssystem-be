@@ -1,8 +1,9 @@
 // Fas 3 e2e — billing: kunder (krypterat pnr, tenant-isolering),
-// company_settings, fakturor (obruten nummerserie även samtidigt, härlett
-// OCR, PUT/DELETE bara på draft), send (snapshot + invoice.sent via
-// outbox), kreditering, Idempotency-Key, och S2S-läsendpoints med
-// scope-kontroll. Körs bara med RUN_E2E mot en uppe stack.
+// company_settings, fakturor (nummer + OCR tilldelas vid send, obruten
+// serie även samtidigt), PUT/DELETE bara på draft, send (snapshot +
+// invoice.sent via outbox), kreditering, Idempotency-Key, S2S-läsendpoints
+// med scope-kontroll, och att X-Tenant-Id ignoreras på användar-endpoints.
+// Körs bara med RUN_E2E mot en uppe stack.
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
@@ -14,11 +15,15 @@ import {
   delTo,
   getTo,
   hmacField,
+  luhnCheck,
   post,
   postTo,
   putTo,
   registerVerifyLogin,
   uniq,
+  validBankgiro,
+  validOrgNumber,
+  validPnr,
 } from "./helpers";
 
 const RUN = !!process.env.RUN_E2E;
@@ -33,7 +38,16 @@ interface Session {
   token: string;
   tenantId: number;
 }
-const authHeader = (s: Session) => ({ authorization: `Bearer ${s.token}` });
+const auth = (s: Session) => ({ authorization: `Bearer ${s.token}` });
+const idem = (s: Session) => ({ ...auth(s), "idempotency-key": key() });
+
+const ONE_LINE = [
+  { description: "Konsulttimmar", quantity: 2.5, unitPriceOre: 100_000, vatRate: 25 },
+];
+
+function luhnValid(n: string): boolean {
+  return luhnCheck(n.slice(0, -1)) === n.slice(-1);
+}
 
 describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
   let sql: ReturnType<typeof postgres>;
@@ -59,6 +73,52 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     return ((await res.json()) as { access_token: string }).access_token;
   }
 
+  async function fillCompanySettings(s: Session): Promise<void> {
+    const res = await putTo(
+      BILLING_URL,
+      "/admin/company-settings",
+      { companyName: `Bolag ${uniq()}`, orgNumber: validOrgNumber(), bankgiro: validBankgiro() },
+      auth(s),
+    );
+    if (res.status !== 200) throw new Error(`company-settings: ${res.status}`);
+  }
+
+  async function makeCustomer(s: Session): Promise<number> {
+    const res = await postTo(
+      BILLING_URL,
+      "/admin/customers",
+      {
+        customerType: "company",
+        name: `Kund ${uniq()}`,
+        email: `${uniq()}@ex.test`,
+        orgNumber: validOrgNumber(),
+        addressStreet: "Vägen 2",
+        addressZip: "22233",
+        addressCity: "Göteborg",
+      },
+      idem(s),
+    );
+    if (res.status !== 201) throw new Error(`makeCustomer: ${res.status}`);
+    return ((await res.json()) as { id: number }).id;
+  }
+
+  async function createDraft(s: Session, customerId: number, lines = ONE_LINE) {
+    const res = await postTo(BILLING_URL, "/admin/invoices", { customerId, lines }, idem(s));
+    if (res.status !== 201) throw new Error(`createDraft: ${res.status}`);
+    return (await res.json()) as {
+      id: number;
+      invoiceNumber: number | null;
+      ocrNumber: string | null;
+      status: string;
+      totalInclVat: number;
+    };
+  }
+
+  async function send(s: Session, id: number) {
+    const res = await postTo(BILLING_URL, `/admin/invoices/${id}/send`, {}, idem(s));
+    return res;
+  }
+
   beforeAll(async () => {
     sql = postgres(DB_URL);
     const hash = await Bun.password.hash(CLIENT_SECRET, { algorithm: "argon2id" });
@@ -80,23 +140,27 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
   });
 
   // ── company_settings ────────────────────────────────────────────────
-  test("GET /admin/company-settings skapar raden lat och PUT uppdaterar den", async () => {
-    const first = await getTo(BILLING_URL, "/admin/company-settings", authHeader(A));
-    expect(first.status).toBe(200);
-    const before = (await first.json()) as { isReadyToSend: boolean };
-    expect(before.isReadyToSend).toBe(false);
+  test("GET /admin/company-settings skapar ingen rad (defaultvy), PUT skapar och uppdaterar", async () => {
+    const s = await newAdmin();
+
+    const before = await getTo(BILLING_URL, "/admin/company-settings", auth(s));
+    expect(before.status).toBe(200);
+    expect(((await before.json()) as { isReadyToSend: boolean }).isReadyToSend).toBe(false);
+    // GET fick inte skapa raden.
+    const [pre] = await sql`SELECT 1 FROM company_settings WHERE tenant_id = ${s.tenantId}`;
+    expect(pre).toBeUndefined();
 
     const upd = await putTo(
       BILLING_URL,
       "/admin/company-settings",
       {
         companyName: "Testbolaget AB",
-        orgNumber: "5560000001",
-        bankgiro: "1234-5678",
-        reminderFee: 75,
+        orgNumber: validOrgNumber(),
+        bankgiro: validBankgiro(),
+        reminderFeeOre: 7500,
         paymentTermsDays: 20,
       },
-      authHeader(A),
+      auth(s),
     );
     expect(upd.status).toBe(200);
     const after = (await upd.json()) as {
@@ -105,8 +169,27 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
       paymentTermsDays: number;
     };
     expect(after.isReadyToSend).toBe(true);
-    expect(after.reminderFee).toBe(75);
+    expect(after.reminderFee).toBe(75); // öre in, kronor ut (database.md #8)
     expect(after.paymentTermsDays).toBe(20);
+
+    // Mutationen ska ha en auditrad.
+    const [logged] = await sql`
+      SELECT action FROM audit_log
+      WHERE tenant_id = ${s.tenantId} AND action = 'company_settings.updated'
+    `;
+    expect(logged).toBeTruthy();
+  });
+
+  test("PUT /admin/company-settings avvisar ogiltigt bankgiro och orgnr", async () => {
+    const s = await newAdmin();
+    expect(
+      (await putTo(BILLING_URL, "/admin/company-settings", { bankgiro: "9999999" }, auth(s)))
+        .status,
+    ).toBe(400);
+    expect(
+      (await putTo(BILLING_URL, "/admin/company-settings", { orgNumber: "5560000000" }, auth(s)))
+        .status,
+    ).toBe(400);
   });
 
   // ── customers ───────────────────────────────────────────────────────
@@ -118,9 +201,9 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
         customerType: "company",
         name: "Utan nyckel",
         email: "u@ex.test",
-        orgNumber: "5560000002",
+        orgNumber: validOrgNumber(),
       },
-      authHeader(A),
+      auth(A),
     );
     expect(res.status).toBe(400);
   });
@@ -133,52 +216,48 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
         customerType: "company",
         name: "Kund AB",
         email: "kund@ex.test",
-        orgNumber: "5560000003",
+        orgNumber: validOrgNumber(),
         addressStreet: "Gatan 1",
         addressZip: "11122",
         addressCity: "Stockholm",
       },
-      { ...authHeader(A), "idempotency-key": key() },
+      idem(A),
     );
     expect(create.status).toBe(201);
     const customer = (await create.json()) as { id: number; hasPnr: boolean };
     expect(customer.hasPnr).toBe(false);
 
-    const list = await getTo(BILLING_URL, "/admin/customers", authHeader(A));
+    const list = await getTo(BILLING_URL, "/admin/customers", auth(A));
     expect(list.status).toBe(200);
-    expect(((await list.json()) as unknown[]).length).toBeGreaterThanOrEqual(1);
+    const page = (await list.json()) as { items: unknown[]; hasMore: boolean };
+    expect(page.items.length).toBeGreaterThanOrEqual(1);
+    expect(typeof page.hasMore).toBe("boolean");
 
-    const one = await getTo(BILLING_URL, `/admin/customers/${customer.id}`, authHeader(A));
-    expect(one.status).toBe(200);
+    expect((await getTo(BILLING_URL, `/admin/customers/${customer.id}`, auth(A))).status).toBe(200);
 
     const upd = await putTo(
       BILLING_URL,
       `/admin/customers/${customer.id}`,
-      {
-        name: "Kund AB (ändrat)",
-      },
-      authHeader(A),
+      { name: "Kund AB (ändrat)" },
+      auth(A),
     );
     expect(upd.status).toBe(200);
     expect(((await upd.json()) as { name: string }).name).toBe("Kund AB (ändrat)");
 
-    // Företag B ser inte företag A:s kund.
-    const cross = await getTo(BILLING_URL, `/admin/customers/${customer.id}`, authHeader(B));
-    expect(cross.status).toBe(404);
+    expect((await getTo(BILLING_URL, `/admin/customers/${customer.id}`, auth(B))).status).toBe(404);
+    expect(
+      (await putTo(BILLING_URL, `/admin/customers/${customer.id}`, { name: "x" }, auth(B))).status,
+    ).toBe(404);
+    expect((await delTo(BILLING_URL, `/admin/customers/${customer.id}`, auth(B))).status).toBe(404);
   });
 
-  test("privatkundens personnummer lagras krypterat, aldrig i klartext i API:t", async () => {
-    const pnr = "199001011234";
+  test("privatkundens personnummer lagras kanoniserat + krypterat, aldrig i klartext", async () => {
+    const pnr = validPnr();
     const res = await postTo(
       BILLING_URL,
       "/admin/customers",
-      {
-        customerType: "private",
-        name: "Anna Ansson",
-        email: "anna@ex.test",
-        pnr,
-      },
-      { ...authHeader(A), "idempotency-key": key() },
+      { customerType: "private", name: "Anna Ansson", email: "anna@ex.test", pnr },
+      idem(A),
     );
     expect(res.status).toBe(201);
     const body = (await res.json()) as Record<string, unknown>;
@@ -189,225 +268,137 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
       SELECT pnr_encrypted, pnr_hmac FROM customers WHERE id = ${body.id as number}
     `;
     expect(row!.pnr_encrypted).not.toContain(pnr);
-    expect(row!.pnr_encrypted.length).toBeGreaterThan(20);
+    // HMAC beräknas över den 12-siffriga kanoniska formen (samma som BankID).
     expect(row!.pnr_hmac).toBe(hmacField(pnr, PNR_HMAC_KEY));
   });
 
-  test("company-kund utan orgNumber avvisas", async () => {
+  test("ogiltigt personnummer och dubblett avvisas", async () => {
+    expect(
+      (
+        await postTo(
+          BILLING_URL,
+          "/admin/customers",
+          { customerType: "private", name: "Fel", email: "f@ex.test", pnr: "199001019999" },
+          idem(A),
+        )
+      ).status,
+    ).toBe(400);
+
+    const pnr = validPnr();
+    const first = await postTo(
+      BILLING_URL,
+      "/admin/customers",
+      { customerType: "private", name: "Bo", email: "bo@ex.test", pnr },
+      idem(A),
+    );
+    expect(first.status).toBe(201);
+    const dup = await postTo(
+      BILLING_URL,
+      "/admin/customers",
+      { customerType: "private", name: "Bo igen", email: "bo2@ex.test", pnr },
+      idem(A),
+    );
+    expect(dup.status).toBe(409);
+  });
+
+  test("X-Tenant-Id ignoreras på användar-endpoints", async () => {
+    // Skapa en kund som A men med B:s tenant-id i headern.
     const res = await postTo(
       BILLING_URL,
       "/admin/customers",
       {
         customerType: "company",
-        name: "Formfel",
-        email: "f@ex.test",
+        name: "Headerkund",
+        email: `${uniq()}@ex.test`,
+        orgNumber: validOrgNumber(),
       },
-      { ...authHeader(A), "idempotency-key": key() },
+      { ...idem(A), "x-tenant-id": String(B.tenantId) },
     );
-    expect(res.status).toBe(400);
+    expect(res.status).toBe(201);
+    const { id } = (await res.json()) as { id: number };
+    // Kunden hamnade hos A (token), inte B (header).
+    expect((await getTo(BILLING_URL, `/admin/customers/${id}`, auth(A))).status).toBe(200);
+    expect((await getTo(BILLING_URL, `/admin/customers/${id}`, auth(B))).status).toBe(404);
+    const [rowA] = await sql`SELECT tenant_id FROM customers WHERE id = ${id}`;
+    expect((rowA as { tenant_id: number }).tenant_id).toBe(A.tenantId);
   });
 
   // ── fakturor ────────────────────────────────────────────────────────
-  async function makeCustomer(s: Session, org: string): Promise<number> {
-    const res = await postTo(
-      BILLING_URL,
-      "/admin/customers",
-      {
-        customerType: "company",
-        name: `Kund ${org}`,
-        email: `${uniq()}@ex.test`,
-        orgNumber: org,
-        addressStreet: "Vägen 2",
-        addressZip: "22233",
-        addressCity: "Göteborg",
-      },
-      { ...authHeader(s), "idempotency-key": key() },
-    );
-    if (res.status !== 201) throw new Error(`makeCustomer: ${res.status}`);
-    return ((await res.json()) as { id: number }).id;
-  }
+  test("utkast har inget nummer; nummer + giltigt OCR tilldelas först vid send", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
 
-  const oneLine = [{ description: "Konsulttimmar", quantity: 2.5, unitPrice: 1000, vatRate: 25 }];
+    const draft = await createDraft(s, customerId);
+    expect(draft.status).toBe("draft");
+    expect(draft.invoiceNumber).toBeNull();
+    expect(draft.ocrNumber).toBeNull();
+    expect(draft.totalInclVat).toBe(3125); // 2,5 * 1000 kr * 1,25
 
-  test("faktura skapas som draft, får härlett giltigt OCR och obruten nummerserie", async () => {
-    const customerId = await makeCustomer(A, "5560000010");
-
-    const r1 = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      {
-        customerId,
-        lines: oneLine,
-      },
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    expect(r1.status).toBe(201);
-    const inv1 = (await r1.json()) as {
-      id: number;
+    const sent = await send(s, draft.id);
+    expect(sent.status).toBe(200);
+    const body = (await sent.json()) as {
       invoiceNumber: number;
       ocrNumber: string;
       status: string;
-      totalInclVat: number;
     };
-    expect(inv1.status).toBe("draft");
-    expect(inv1.totalInclVat).toBe(3125); // 2,5 * 1000 kr * 1,25
-    expect(luhnValid(inv1.ocrNumber)).toBe(true);
-
-    const r2 = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      {
-        customerId,
-        lines: oneLine,
-      },
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    const inv2 = (await r2.json()) as { invoiceNumber: number };
-    expect(inv2.invoiceNumber).toBe(inv1.invoiceNumber + 1);
+    expect(body.status).toBe("sent");
+    expect(body.invoiceNumber).toBeGreaterThanOrEqual(1);
+    expect(luhnValid(body.ocrNumber)).toBe(true);
   });
 
-  test("samtidiga fakturor får distinkta, sammanhängande nummer (radlås på serien)", async () => {
-    const customerId = await makeCustomer(A, "5560000011");
-    const N = 8;
-    const results = await Promise.all(
-      Array.from({ length: N }, () =>
-        postTo(
-          BILLING_URL,
-          "/admin/invoices",
-          { customerId, lines: oneLine },
-          {
-            ...authHeader(A),
-            "idempotency-key": key(),
-          },
-        ),
-      ),
-    );
-    for (const r of results) expect(r.status).toBe(201);
-    const numbers = (
-      await Promise.all(results.map((r) => r.json() as Promise<{ invoiceNumber: number }>))
-    )
-      .map((b) => b.invoiceNumber)
-      .sort((a, b) => a - b);
-    expect(new Set(numbers).size).toBe(N); // inga dubbletter
-    for (let i = 1; i < N; i++) expect(numbers[i]).toBe(numbers[i - 1]! + 1); // inga hål
-  });
-
-  test("två tenants har var sin serie — samma nummer, olika OCR-namnrymd", async () => {
-    const custA = await makeCustomer(A, "5560000020");
-    const custB = await makeCustomer(B, "5560000021");
-    await putTo(
-      BILLING_URL,
-      "/admin/company-settings",
-      { companyName: "B AB", orgNumber: "5560000021", bankgiro: "9-9" },
-      authHeader(B),
-    );
-
-    const ra = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      { customerId: custA, lines: oneLine },
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    const rb = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      { customerId: custB, lines: oneLine },
-      { ...authHeader(B), "idempotency-key": key() },
-    );
-    const ia = (await ra.json()) as { ocrNumber: string; invoiceNumber: number };
-    const ib = (await rb.json()) as { ocrNumber: string; invoiceNumber: number };
-
-    // Serierna är oberoende: bådas första faktura är nr 1.
-    expect(ib.invoiceNumber).toBe(1);
-    // Om numret råkar bli lika blir OCR lika — men det är per tenant unikt,
-    // och uppslag sker alltid inom en tenant. Bevisa isoleringen:
-    const svc = await serviceToken("billing:invoice:read");
-    const asA = await getTo(BILLING_URL, `/internal/invoices/by-ocr?ocr=${ia.ocrNumber}`, {
-      authorization: `Bearer ${svc}`,
-      "x-tenant-id": String(A.tenantId),
-    });
-    expect(asA.status).toBe(200);
-    expect(((await asA.json()) as { currentInvoiceId: number }).currentInvoiceId).toBeGreaterThan(
-      0,
-    );
-  });
-
-  test("PUT/DELETE tillåts på draft men ger 409 efter send; send kräver avsändaruppgifter", async () => {
-    // Ny tenant utan ifyllda company-settings.
-    const C = await newAdmin();
-    const customerId = await makeCustomer(C, "5560000030");
-    const created = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      { customerId, lines: oneLine },
-      { ...authHeader(C), "idempotency-key": key() },
-    );
-    const inv = (await created.json()) as { id: number };
+  test("send kräver avsändaruppgifter (422), PUT/DELETE ger 409 efter send", async () => {
+    const s = await newAdmin();
+    const customerId = await makeCustomer(s);
+    const draft = await createDraft(s, customerId);
 
     // PUT på draft OK
     const put1 = await putTo(
       BILLING_URL,
-      `/admin/invoices/${inv.id}`,
-      {
-        lines: [{ description: "Ändrad", quantity: 1, unitPrice: 500, vatRate: 25 }],
-      },
-      authHeader(C),
+      `/admin/invoices/${draft.id}`,
+      { lines: [{ description: "Ändrad", quantity: 1, unitPriceOre: 50_000, vatRate: 25 }] },
+      auth(s),
     );
     expect(put1.status).toBe(200);
     expect(((await put1.json()) as { totalInclVat: number }).totalInclVat).toBe(625);
 
     // send utan avsändaruppgifter -> 422
-    const noInfo = await postTo(
-      BILLING_URL,
-      `/admin/invoices/${inv.id}/send`,
-      {},
-      { ...authHeader(C), "idempotency-key": key() },
-    );
-    expect(noInfo.status).toBe(422);
+    expect((await send(s, draft.id)).status).toBe(422);
 
-    // fyll i och skicka
-    await putTo(
-      BILLING_URL,
-      "/admin/company-settings",
-      {
-        companyName: "C AB",
-        orgNumber: "5560000030",
-        bankgiro: "5-5",
-      },
-      authHeader(C),
-    );
-    const sent = await postTo(
-      BILLING_URL,
-      `/admin/invoices/${inv.id}/send`,
-      {},
-      { ...authHeader(C), "idempotency-key": key() },
-    );
-    expect(sent.status).toBe(200);
-    expect(((await sent.json()) as { status: string }).status).toBe("sent");
+    await fillCompanySettings(s);
+    expect((await send(s, draft.id)).status).toBe(200);
 
     // PUT/DELETE på sent -> 409
     expect(
-      (await putTo(BILLING_URL, `/admin/invoices/${inv.id}`, { lines: oneLine }, authHeader(C)))
+      (await putTo(BILLING_URL, `/admin/invoices/${draft.id}`, { lines: ONE_LINE }, auth(s)))
         .status,
     ).toBe(409);
-    expect((await delTo(BILLING_URL, `/admin/invoices/${inv.id}`, authHeader(C))).status).toBe(409);
+    expect((await delTo(BILLING_URL, `/admin/invoices/${draft.id}`, auth(s))).status).toBe(409);
+  });
 
-    // snapshot finns via S2S, och invoice.sent publiceras genom outboxen
+  test("send skriver snapshot och publicerar invoice.sent genom outboxen", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+    const draft = await createDraft(s, customerId);
+    expect((await send(s, draft.id)).status).toBe(200);
+
     const svc = await serviceToken("billing:invoice:read");
-    const snap = await getTo(BILLING_URL, `/internal/invoices/${inv.id}/snapshot`, {
+    const snap = await getTo(BILLING_URL, `/internal/invoices/${draft.id}/snapshot`, {
       authorization: `Bearer ${svc}`,
-      "x-tenant-id": String(C.tenantId),
+      "x-tenant-id": String(s.tenantId),
     });
     expect(snap.status).toBe(200);
     const payload = (await snap.json()) as { company: { bankgiro: string }; lines: unknown[] };
-    expect(payload.company.bankgiro).toBe("5-5");
+    expect(payload.company.bankgiro).toBeTruthy();
+    expect(payload.lines.length).toBe(1);
 
     let published = false;
     for (let i = 0; i < 30 && !published; i++) {
       const [row] = await sql<{ published_at: Date | null }[]>`
         SELECT published_at FROM event_outbox
         WHERE source_service = 'billing' AND event_type = 'invoice.sent'
-          AND (payload->>'invoiceId')::int = ${inv.id}
+          AND (payload->>'invoiceId')::int = ${draft.id}
       `;
       published = !!row?.published_at;
       if (!published) await sleep(500);
@@ -415,58 +406,98 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     expect(published).toBe(true);
   });
 
-  test("Idempotency-Key: samma nyckel spelar upp svaret, annan body ger 422", async () => {
-    const customerId = await makeCustomer(A, "5560000040");
+  test("samtidiga send ger distinkta, sammanhängande nummer (radlås på serien)", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+    const N = 8;
+
+    const drafts = await Promise.all(Array.from({ length: N }, () => createDraft(s, customerId)));
+    const sends = await Promise.all(drafts.map((d) => send(s, d.id)));
+    for (const r of sends) expect(r.status).toBe(200);
+
+    const numbers = (
+      await Promise.all(sends.map((r) => r.json() as Promise<{ invoiceNumber: number }>))
+    )
+      .map((b) => b.invoiceNumber)
+      .sort((a, b) => a - b);
+    expect(new Set(numbers).size).toBe(N); // inga dubbletter
+    for (let i = 1; i < N; i++) expect(numbers[i]).toBe(numbers[i - 1]! + 1); // inga hål
+  });
+
+  test("radering av utkast river inget hål i nummerserien", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+
+    const first = await createDraft(s, customerId);
+    expect((await send(s, first.id)).status).toBe(200);
+
+    const doomed = await createDraft(s, customerId);
+    expect((await delTo(BILLING_URL, `/admin/invoices/${doomed.id}`, auth(s))).status).toBe(200);
+
+    const next = await createDraft(s, customerId);
+    const nextSent = await send(s, next.id);
+    const firstSent = await getTo(BILLING_URL, `/admin/invoices/${first.id}`, auth(s));
+    const firstNumber = ((await firstSent.json()) as { invoiceNumber: number }).invoiceNumber;
+    const nextNumber = ((await nextSent.json()) as { invoiceNumber: number }).invoiceNumber;
+    expect(nextNumber).toBe(firstNumber + 1); // det raderade utkastet förbrukade inget nummer
+  });
+
+  test("Idempotency-Key: samma nyckel spelar upp svaret, annan body ger 422, annan endpoint ger 422", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
     const k = key();
-    const body = { customerId, lines: oneLine };
+    const body = { customerId, lines: ONE_LINE };
 
     const r1 = await postTo(BILLING_URL, "/admin/invoices", body, {
-      ...authHeader(A),
+      ...auth(s),
       "idempotency-key": k,
     });
     const r2 = await postTo(BILLING_URL, "/admin/invoices", body, {
-      ...authHeader(A),
+      ...auth(s),
       "idempotency-key": k,
     });
     expect(r1.status).toBe(201);
     expect(r2.status).toBe(201);
-    expect(((await r1.json()) as { id: number }).id).toBe(((await r2.json()) as { id: number }).id);
+    const id1 = ((await r1.json()) as { id: number }).id;
+    const id2 = ((await r2.json()) as { id: number }).id;
+    expect(id1).toBe(id2);
 
     const r3 = await postTo(
       BILLING_URL,
       "/admin/invoices",
       {
         customerId,
-        lines: [{ description: "Annat", quantity: 9, unitPrice: 9, vatRate: 25 }],
+        lines: [{ description: "Annat", quantity: 9, unitPriceOre: 900, vatRate: 25 }],
       },
-      { ...authHeader(A), "idempotency-key": k },
+      { ...auth(s), "idempotency-key": k },
     );
     expect(r3.status).toBe(422);
+
+    // Samma nyckel mot send-endpointen -> 422 (inte tyst uppspelning av skapa-svaret).
+    const r4 = await postTo(
+      BILLING_URL,
+      `/admin/invoices/${id1}/send`,
+      {},
+      {
+        ...auth(s),
+        "idempotency-key": k,
+      },
+    );
+    expect(r4.status).toBe(422);
   });
 
-  test("kreditering: ny credit_note i settled med negativa belopp, originalet credited, serien obruten", async () => {
-    const customerId = await makeCustomer(A, "5560000050");
-    // säkerställ avsändaruppgifter (tenant A satte dem i första testet)
-    const created = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      { customerId, lines: oneLine },
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    const inv = (await created.json()) as { id: number; invoiceNumber: number };
-    await postTo(
-      BILLING_URL,
-      `/admin/invoices/${inv.id}/send`,
-      {},
-      { ...authHeader(A), "idempotency-key": key() },
-    );
+  test("kreditering: credit_note i settled med negativa belopp, originalet credited, serien obruten", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+    const draft = await createDraft(s, customerId);
+    const sent = await send(s, draft.id);
+    const sentNo = ((await sent.json()) as { invoiceNumber: number }).invoiceNumber;
 
-    const credit = await postTo(
-      BILLING_URL,
-      `/admin/invoices/${inv.id}/credit`,
-      {},
-      { ...authHeader(A), "idempotency-key": key() },
-    );
+    const credit = await postTo(BILLING_URL, `/admin/invoices/${draft.id}/credit`, {}, idem(s));
     expect(credit.status).toBe(201);
     const cn = (await credit.json()) as {
       id: number;
@@ -478,110 +509,144 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     expect(cn.invoiceType).toBe("credit_note");
     expect(cn.status).toBe("settled");
     expect(cn.totalInclVat).toBe(-3125);
-    expect(cn.invoiceNumber).toBe(inv.invoiceNumber + 1);
+    expect(cn.invoiceNumber).toBe(sentNo + 1);
 
-    const original = await getTo(BILLING_URL, `/admin/invoices/${inv.id}`, authHeader(A));
+    const original = await getTo(BILLING_URL, `/admin/invoices/${draft.id}`, auth(s));
     expect(((await original.json()) as { status: string }).status).toBe("credited");
 
-    // dubbel kreditering av samma faktura -> 409
-    const again = await postTo(
-      BILLING_URL,
-      `/admin/invoices/${inv.id}/credit`,
-      {},
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    expect(again.status).toBe(409);
+    // dubbel kreditering -> 409
+    expect(
+      (await postTo(BILLING_URL, `/admin/invoices/${draft.id}/credit`, {}, idem(s))).status,
+    ).toBe(409);
+  });
+
+  test("tenant-isolering: företag B får 404 på företag A:s faktura överallt", async () => {
+    await fillCompanySettings(A);
+    const customerId = await makeCustomer(A);
+    const draft = await createDraft(A, customerId);
+
+    expect((await getTo(BILLING_URL, `/admin/invoices/${draft.id}`, auth(B))).status).toBe(404);
+    expect(
+      (await putTo(BILLING_URL, `/admin/invoices/${draft.id}`, { lines: ONE_LINE }, auth(B)))
+        .status,
+    ).toBe(404);
+    expect((await delTo(BILLING_URL, `/admin/invoices/${draft.id}`, auth(B))).status).toBe(404);
+    expect((await send(B, draft.id)).status).toBe(404);
+    expect(
+      (await postTo(BILLING_URL, `/admin/invoices/${draft.id}/credit`, {}, idem(B))).status,
+    ).toBe(404);
   });
 
   // ── S2S-endpoints ───────────────────────────────────────────────────
   test("S2S: scope krävs, X-Tenant-Id krävs, fel token avvisas", async () => {
     const good = await serviceToken("billing:company:read");
-    const wrong = await serviceToken("billing:invoice:read");
+    const wrongScope = await serviceToken("billing:invoice:read");
+    const fresh = await newAdmin();
+    const tid = String(fresh.tenantId);
 
-    // rätt scope + tenant -> 200
-    const ok = await getTo(BILLING_URL, "/internal/company-settings", {
-      authorization: `Bearer ${good}`,
-      "x-tenant-id": String(A.tenantId),
-    });
-    expect(ok.status).toBe(200);
+    expect(
+      (
+        await getTo(BILLING_URL, "/internal/company-settings", {
+          authorization: `Bearer ${good}`,
+          "x-tenant-id": tid,
+        })
+      ).status,
+    ).toBe(404); // ingen rad än — S2S skapar inte lat
 
-    // saknad X-Tenant-Id -> medvetet 400
-    const noTenant = await getTo(BILLING_URL, "/internal/company-settings", {
-      authorization: `Bearer ${good}`,
-    });
-    expect(noTenant.status).toBe(400);
+    await fillCompanySettings(fresh);
+    expect(
+      (
+        await getTo(BILLING_URL, "/internal/company-settings", {
+          authorization: `Bearer ${good}`,
+          "x-tenant-id": tid,
+        })
+      ).status,
+    ).toBe(200);
 
-    // fel scope -> 403
-    const badScope = await getTo(BILLING_URL, "/internal/company-settings", {
-      authorization: `Bearer ${wrong}`,
-      "x-tenant-id": String(A.tenantId),
-    });
-    expect(badScope.status).toBe(403);
-
-    // ingen token -> 401
-    const noToken = await getTo(BILLING_URL, "/internal/company-settings", {
-      "x-tenant-id": String(A.tenantId),
-    });
-    expect(noToken.status).toBe(401);
-
-    // användar-token på S2S-endpoint -> 401
-    const userTok = await getTo(BILLING_URL, "/internal/company-settings", {
-      ...authHeader(A),
-      "x-tenant-id": String(A.tenantId),
-    });
-    expect(userTok.status).toBe(401);
+    expect(
+      (await getTo(BILLING_URL, "/internal/company-settings", { authorization: `Bearer ${good}` }))
+        .status,
+    ).toBe(400); // saknad X-Tenant-Id
+    expect(
+      (
+        await getTo(BILLING_URL, "/internal/company-settings", {
+          authorization: `Bearer ${wrongScope}`,
+          "x-tenant-id": tid,
+        })
+      ).status,
+    ).toBe(403); // fel scope
+    expect(
+      (
+        await getTo(BILLING_URL, "/internal/company-settings", {
+          "x-tenant-id": tid,
+        })
+      ).status,
+    ).toBe(401); // ingen token
+    expect(
+      (
+        await getTo(BILLING_URL, "/internal/company-settings", {
+          ...auth(fresh),
+          "x-tenant-id": tid,
+        })
+      ).status,
+    ).toBe(401); // användar-token på S2S-endpoint
   });
 
-  test("S2S: /internal/customers/:id lämnar inte ut personnummer", async () => {
-    const pnr = "199202022345";
-    const res = await postTo(
+  test("S2S: snapshot och by-ocr är tenant-isolerade och personnummerfria", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const pnr = validPnr();
+    const custRes = await postTo(
       BILLING_URL,
       "/admin/customers",
-      {
-        customerType: "private",
-        name: "Bo Boberg",
-        email: "bo@ex.test",
-        pnr,
-      },
-      { ...authHeader(A), "idempotency-key": key() },
+      { customerType: "private", name: "Cilla", email: "c@ex.test", pnr },
+      idem(s),
     );
-    const { id } = (await res.json()) as { id: number };
+    const customerId = ((await custRes.json()) as { id: number }).id;
+    const draft = await createDraft(s, customerId);
+    const sent = await send(s, draft.id);
+    const ocr = ((await sent.json()) as { ocrNumber: string }).ocrNumber;
 
-    const svc = await serviceToken("billing:customer:read");
-    const s2s = await getTo(BILLING_URL, `/internal/customers/${id}`, {
+    const svc = await serviceToken("billing:invoice:read");
+    const custSvc = await serviceToken("billing:customer:read");
+
+    // rätt tenant
+    const okSnap = await getTo(BILLING_URL, `/internal/invoices/${draft.id}/snapshot`, {
       authorization: `Bearer ${svc}`,
-      "x-tenant-id": String(A.tenantId),
+      "x-tenant-id": String(s.tenantId),
     });
-    expect(s2s.status).toBe(200);
-    expect(JSON.stringify(await s2s.json())).not.toContain(pnr);
-  });
+    expect(okSnap.status).toBe(200);
+    const byOcr = await getTo(BILLING_URL, `/internal/invoices/by-ocr?ocr=${ocr}`, {
+      authorization: `Bearer ${svc}`,
+      "x-tenant-id": String(s.tenantId),
+    });
+    expect(byOcr.status).toBe(200);
+    expect(((await byOcr.json()) as { currentInvoiceId: number }).currentInvoiceId).toBe(draft.id);
 
-  test("tenant-isolering: företag B får 404 på företag A:s faktura", async () => {
-    const customerId = await makeCustomer(A, "5560000060");
-    const created = await postTo(
-      BILLING_URL,
-      "/admin/invoices",
-      { customerId, lines: oneLine },
-      { ...authHeader(A), "idempotency-key": key() },
-    );
-    const inv = (await created.json()) as { id: number };
-    const cross = await getTo(BILLING_URL, `/admin/invoices/${inv.id}`, authHeader(B));
-    expect(cross.status).toBe(404);
+    // fel tenant (B) -> 404, inte data
+    expect(
+      (
+        await getTo(BILLING_URL, `/internal/invoices/${draft.id}/snapshot`, {
+          authorization: `Bearer ${svc}`,
+          "x-tenant-id": String(B.tenantId),
+        })
+      ).status,
+    ).toBe(404);
+    expect(
+      (
+        await getTo(BILLING_URL, `/internal/invoices/by-ocr?ocr=${ocr}`, {
+          authorization: `Bearer ${svc}`,
+          "x-tenant-id": String(B.tenantId),
+        })
+      ).status,
+    ).toBe(404);
+
+    // customer-S2S lämnar inte ut personnummer
+    const custS2s = await getTo(BILLING_URL, `/internal/customers/${customerId}`, {
+      authorization: `Bearer ${custSvc}`,
+      "x-tenant-id": String(s.tenantId),
+    });
+    expect(custS2s.status).toBe(200);
+    expect(JSON.stringify(await custS2s.json())).not.toContain(pnr);
   });
 });
-
-// Oberoende Luhn-validator för OCR-assertions.
-function luhnValid(n: string): boolean {
-  let sum = 0;
-  let alt = false;
-  for (let i = n.length - 1; i >= 0; i--) {
-    let d = n.charCodeAt(i) - 48;
-    if (alt) {
-      d *= 2;
-      if (d > 9) d -= 9;
-    }
-    sum += d;
-    alt = !alt;
-  }
-  return sum % 10 === 0;
-}

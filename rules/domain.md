@@ -12,7 +12,7 @@ draft ──► sent ──► paid
             └──► credited
 ```
 
-1. **`draft` är enda status där fakturan får ändras eller raderas.** `PUT` och `DELETE` mot en faktura i något annat läge svarar `409`.
+1. **`draft` är enda status där fakturan får ändras eller raderas.** `PUT` och `DELETE` mot en faktura i något annat läge svarar `409`. Ett utkast har ännu inget fakturanummer och ingen OCR — de tilldelas vid utskick.
 2. **En skickad faktura är en bokföringspost.** Den får aldrig redigeras, aldrig raderas, aldrig få nytt belopp. Rättelse sker med kreditfaktura.
 3. **Status går aldrig baklänges.** En `paid` faktura blir inte `sent` igen.
 
@@ -24,7 +24,7 @@ draft ──► sent ──► paid
 ## Nummerserie
 
 6. **Fakturanummer är obrutna per företag.** Inga hål, inga dubbletter, ingen omstart.
-7. **Numret hämtas med `SELECT ... FOR UPDATE` i samma transaktion som fakturan skapas.** Failar fakturan rullar numret tillbaka med den — annars uppstår ett hål.
+7. **Numret hämtas med `SELECT ... FOR UPDATE` i samma transaktion som det tilldelas** — vid `POST /:id/send` för en vanlig faktura, vid `POST /:id/credit` för en kreditfaktura. Failar den transaktionen rullar numret tillbaka med den. Ett utkast förbrukar inget nummer, så att radera ett utkast river inget hål i serien.
 8. Varje företag har sin egen serie. Företag A och företag B har båda en faktura nr 1.
 
 ## Pengar
@@ -82,5 +82,5 @@ draft ──► sent ──► paid
 
 ## Kreditfakturans livscykel (fas 3)
 
-34. **En kreditfaktura (`invoice_type = 'credit_note'`) skapas av `POST /admin/invoices/:id/credit`** direkt i status `settled`, i samma transaktion som originalet sätts till `credited`. Den tar ett eget nummer ur samma serie och har negativa belopp — raderna är originalradernas färdigt avrundade belopp med ombytt tecken.
+34. **En kreditfaktura (`invoice_type = 'credit_note'`) skapas av `POST /admin/invoices/:id/credit`** direkt i status `settled`, i samma transaktion som originalet sätts till `credited`. Den tar ett eget nummer ur samma serie (under samma radlås som utskick använder) och har negativa belopp — raderna är originalradernas färdigt avrundade belopp med ombytt tecken.
 35. **En kreditfaktura blir aldrig `overdue`**, plockas aldrig av påminnelsejobbet och räknas aldrig som utestående. Den har ändå `delivery_status` eftersom den skickas till kunden som PDF.
