@@ -106,6 +106,66 @@ describe.skipIf(!RUN)("auth fas 1 e2e", () => {
     expect((await post("/auth/login", { email, password: PASSWORD })).status).toBe(403);
   });
 
+  test("forgot-password -> reset-password -> gammalt lösenord slutar fungera, refresh-tokens dödas", async () => {
+    const email = `reset-${uniq()}@example.test`;
+    await registerAndVerify(email);
+    const first = (await (await post("/auth/login", { email, password: PASSWORD })).json()) as {
+      refreshToken: string;
+    };
+
+    // forgot svarar alltid 200 (enumeringssäkert)
+    expect((await post("/auth/forgot-password", { email })).status).toBe(200);
+    const { token } = (await (
+      await get(`/auth/dev/token?email=${encodeURIComponent(email)}&type=password_reset`)
+    ).json()) as { token: string };
+
+    const NEW_PASSWORD = "ett-helt-nytt-lösenord-9876";
+    expect((await post("/auth/reset-password", { token, newPassword: NEW_PASSWORD })).status).toBe(
+      200,
+    );
+
+    // Gammalt lösenord nekas, nytt fungerar
+    expect((await post("/auth/login", { email, password: PASSWORD })).status).toBe(401);
+    expect((await post("/auth/login", { email, password: NEW_PASSWORD })).status).toBe(200);
+    // Refresh-token från före bytet är dött
+    expect((await post("/auth/refresh", { refreshToken: first.refreshToken })).status).toBe(401);
+    // Reset-token är engångs
+    expect(
+      (await post("/auth/reset-password", { token, newPassword: "återanvänt-1234567" })).status,
+    ).toBe(400);
+  });
+
+  test("forgot-password för okänd e-post svarar likadant (enumeringssäkert)", async () => {
+    const res = await post("/auth/forgot-password", { email: `finns-inte-${uniq()}@example.test` });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "ok" });
+  });
+
+  test("dubbelregistrering på samma e-post ger 201 utan andra tenant", async () => {
+    const email = `dubbel-${uniq()}@example.test`;
+    const org = newOrgNumber();
+    const a = await post("/auth/register", {
+      companyName: "Bolag A",
+      orgNumber: org,
+      email,
+      password: PASSWORD,
+    });
+    expect(a.status).toBe(201);
+    const before = await sql`SELECT count(*)::int AS n FROM tenants`;
+
+    // Andra registreringen: samma e-post, annat orgnr -> fortfarande 201,
+    // ingen ny tenant, ingen enumeringssignal via 500.
+    const b = await post("/auth/register", {
+      companyName: "Bolag B",
+      orgNumber: newOrgNumber(),
+      email,
+      password: PASSWORD,
+    });
+    expect(b.status).toBe(201);
+    const after = await sql`SELECT count(*)::int AS n FROM tenants`;
+    expect(after[0]!.n).toBe(before[0]!.n);
+  });
+
   test("tenant.created når RabbitMQ via outboxen", async () => {
     const conn = await amqplib.connect(MQ_URL);
     const ch = await conn.createChannel();

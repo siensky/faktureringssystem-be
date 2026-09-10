@@ -44,7 +44,9 @@ jobs:
       # hand, eller glömt köra codegen efter en schemaändring.
       - run: bun run codegen
       - run: git diff --exit-code -- packages/contracts/src/generated
-      - run: bun test packages services
+      # --coverage för synlighet (testing.md #14: >=90% på ren
+      # affärslogik). Ingen hård tröskel i CI än — se PR-not.
+      - run: bun test --coverage packages services
 
   unit-tests-python:
     runs-on: ubuntu-latest

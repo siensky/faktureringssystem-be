@@ -22,37 +22,38 @@ echo "Väntar på RabbitMQ management API..."
 until curl -sf -u "$AUTH" "$API/overview" > /dev/null 2>&1; do
   sleep 1
 done
-echo "RabbitMQ är uppe. Skapar tjänstekonton."
+echo "RabbitMQ är uppe. Deklarerar 'events'-exchanget."
+
+# Det delade topic-exchanget för affärshändelser deklareras HÄR, en gång,
+# inte av tjänsterna. Då behöver ingen tjänst "configure"-behörighet på
+# det — bara "write" (publicera) och "read" (binda köer). Ingen enskild
+# tjänst kan då redeklarera det med andra parametrar eller ta bort det.
+curl -sf -u "$AUTH" -X PUT "$API/exchanges/%2F/events" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"topic","durable":true}' > /dev/null
+
+echo "Skapar tjänstekonton."
 
 create_user() {
   name="$1"
   password="$2"
-  # Varje tjänst får:
-  #   - system.ping + sin egen system.ping.<namn>-kö  (fas 0, infra-diagnostik)
-  #   - "events"                                       (fas 1, det delade topic-exchanget för affärshändelser)
-  #   - sina egna konsumentköer "<namn>.*"             (bind + consume)
-  # En explicit, granskningsbar rad per tjänst — inte ett brett "allow all".
-  # "events" är delat på samma sätt som system.ping: en topic-buss flera
-  # tjänster legitimt publicerar till och konsumerar från.
+  # Behörigheter per tjänst, granskningsbart och smalt:
+  #   configure : sin egen system.ping.<namn>-kö + sina egna "<namn>.*"-köer
+  #               + system.ping-exchanget (fanout, deklareras av tjänsten)
+  #   write     : publicera på system.ping och events, binda sina egna köer
+  #   read      : konsumera sina egna köer, binda mot system.ping/events
+  # "events" saknas medvetet ur "configure" (se ovan).
   curl -sf -u "$AUTH" -X PUT "$API/users/$name" \
     -H "Content-Type: application/json" \
     -d "{\"password\":\"$password\",\"tags\":\"\"}" > /dev/null
 
   # RabbitMQs permissionsmodell för queue.bind kräver "write" på KÖN (inte
-  # bara på exchanget) — annars 403 (ACCESS-REFUSED) vid varje bind, även
-  # om exchanget självt har rätt "write". Se
-  # https://www.rabbitmq.com/docs/access-control#permissions för hela
-  # tabellen (configure/write/read per operation).
+  # bara på exchanget) — annars 403 vid varje bind. Se
+  # https://www.rabbitmq.com/docs/access-control#permissions
   #
-  # Regexen byggs med sed mot en enkelcitatad mall i stället för att
-  # interpolera "\\." direkt i en dubbelcitatad sträng — POSIX sh reducerar
-  # antalet backslash olika beroende på sammanhang (variabel-assignment vs
-  # here-doc vs kommandosubstitution), och det är för lätt att råka skicka
-  # fel antal till JSON-payloaden. Mallen skriver den bokstavliga JSON-
-  # texten en gång, oavbrutet, och sed byter bara ut __NAME__ mot tjänstens
-  # namn.
-  pattern='^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$'
-  permissions_json=$(printf '%s' "{\"configure\":\"$pattern\",\"write\":\"$pattern\",\"read\":\"$pattern\"}" | sed "s/__NAME__/$name/g")
+  # Hela JSON-payloaden skrivs som en enkelcitatad mall (så sh inte rör
+  # backslash) och sed byter bara ut __NAME__. "configure" saknar "events".
+  permissions_json=$(printf '%s' '{"configure":"^(system\\.ping(\\.__NAME__)?|__NAME__\\..*)$","write":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$","read":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$"}' | sed "s/__NAME__/$name/g")
 
   curl -sf -u "$AUTH" -X PUT "$API/permissions/%2F/$name" \
     -H "Content-Type: application/json" \
