@@ -7,10 +7,10 @@
 // får aldrig hävda vilken tenant den agerar i. Tenant kommer enbart ur
 // token-claimen.
 
-import { randomUUID } from "node:crypto";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import { Unauthorized } from "../errors";
 import type { RequestContext } from "../repository";
+import { resolveCorrelationId } from "./correlation";
 import { verifyAccessToken } from "./tokens";
 
 declare module "fastify" {
@@ -30,8 +30,7 @@ function bearer(request: FastifyRequest): string {
 export function createRequireUser(userSecret: string) {
   return async function requireUser(request: FastifyRequest, _reply: FastifyReply): Promise<void> {
     const claims = await verifyAccessToken(bearer(request), userSecret);
-    const correlationId =
-      (request.headers["x-correlation-id"] as string | undefined) ?? randomUUID();
+    const correlationId = resolveCorrelationId(request.headers["x-correlation-id"]);
 
     request.ctx = {
       userId: claims.userId,

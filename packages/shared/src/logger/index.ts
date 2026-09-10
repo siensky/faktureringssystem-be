@@ -12,31 +12,45 @@
 // `a.password` men inte `a.b.password`), så en `formatters.log`-hook som
 // går igenom hela objektet används i stället — samma beteende som
 // structlog-maskeringen på Python-sidan (services/documents).
+//
+// Fältnamn normaliseras (gemener, `_`/`-` bort) före jämförelse, så både
+// `password_hash`, `passwordHash` och `PasswordHash` fångas av en post.
 
 import pino, { type Logger, type LoggerOptions } from "pino";
 
-/** Fältnamn (gemener) vars värde alltid maskeras, oavsett var i objektet. */
+/** Normaliserade fältnamn vars värde alltid maskeras, oavsett var i objektet. */
 const SENSITIVE_KEYS = new Set([
   "password",
   "passwordhash",
+  "currentpassword",
+  "newpassword",
   "token",
   "accesstoken",
   "refreshtoken",
   "idtoken",
   "clientsecret",
+  "secret",
   "authorization",
   "cookie",
   "pnr",
   "personnummer",
+  "personalnumber",
   "pnrhash",
   "pnrhmac",
   "pnrencrypted",
   "resettoken",
+  "verificationtoken",
   "signedurl",
+  // postgres.js-fel bär med sig frågan och dess parametrar
+  "query",
+  "parameters",
+  "params",
 ]);
 
 const CENSOR = "[REDACTED]";
 const MAX_DEPTH = 8;
+
+const normalizeKey = (key: string): string => key.toLowerCase().replace(/[_-]/g, "");
 
 export function deepRedact(value: unknown, seen = new WeakSet<object>(), depth = 0): unknown {
   if (value === null || typeof value !== "object" || depth > MAX_DEPTH) {
@@ -53,12 +67,12 @@ export function deepRedact(value: unknown, seen = new WeakSet<object>(), depth =
 
   const out: Record<string, unknown> = {};
   for (const [key, val] of Object.entries(value as Record<string, unknown>)) {
-    out[key] = SENSITIVE_KEYS.has(key.toLowerCase()) ? CENSOR : deepRedact(val, seen, depth + 1);
+    out[key] = SENSITIVE_KEYS.has(normalizeKey(key)) ? CENSOR : deepRedact(val, seen, depth + 1);
   }
   return out;
 }
 
-export { SENSITIVE_KEYS };
+export { SENSITIVE_KEYS, normalizeKey };
 
 export function createLogger(
   serviceName: string,

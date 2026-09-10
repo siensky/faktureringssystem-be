@@ -8,6 +8,7 @@ export { createDbClient, type DbClientOptions } from "./db";
 export {
   connectRabbitMQ,
   publishJson,
+  publishConfirmed,
   consumeJson,
   type RabbitConnection,
   type JsonMessageHandler,
@@ -27,16 +28,19 @@ export {
   USER_TOKEN,
   createRequireUser,
   contextOf,
+  resolveCorrelationId,
   signServiceToken,
   verifyServiceToken,
   assertScope,
   SERVICE_TOKEN,
   createRequireService,
   serviceContextOf,
+  requireTenantHeader,
   getServiceToken,
   type AccessTokenClaims,
   type VerifiedServiceToken,
   type ServiceContext as M2MServiceContext,
+  type TenantActiveCheck,
   type ServiceTokenClientOptions,
 } from "./auth";
 export {

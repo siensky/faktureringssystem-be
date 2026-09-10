@@ -1,7 +1,7 @@
 // Delad Fastify-bootstrap för auth/billing/payments. Fas 0 hade tre nästan
 // identiska index.ts — allt det gemensamma (CORS, helmet, bodyLimit, Redis-
 // baserad rate limiting, felhanterare, /health/*, system-ping) bor här i
-// stället (code-style.md #25, #27). Varje tjänsts index.ts blir då bara
+// stället (code-style.md #27, #29). Varje tjänsts index.ts blir då bara
 // "läs env, anropa startService, registrera dina egna routes".
 
 import cors from "@fastify/cors";
@@ -41,6 +41,14 @@ export interface StartServiceOptions {
   /** Explicit origin-lista, aldrig "*" när Authorization/cookies är med. */
   corsOrigins: string[];
   logger: Logger;
+  /**
+   * Antal proxy-hopp att lita på för `request.ip` / X-Forwarded-For.
+   * nginx är enda proxyn framför tjänsterna, så default `1`. Utan detta
+   * blir `request.ip` = nginx-containerns IP för ALL trafik, och varje
+   * per-IP-gräns kollapsar till ett globalt tak. Sätt `0` om tjänsten
+   * körs utan proxy.
+   */
+  trustProxyHops?: number;
   /** Readiness-checkar utöver de inbyggda (rabbitmq, redis). */
   extraReadinessChecks?: ReadinessCheck[];
   /**
@@ -60,10 +68,16 @@ export interface ServiceContext {
 export async function startService(options: StartServiceOptions): Promise<AnyFastify> {
   const { serviceName, port, logger } = options;
 
+  const trustProxyHops = options.trustProxyHops ?? 1;
   const app = Fastify({
     loggerInstance: logger,
     disableRequestLogging: false,
     bodyLimit: DEFAULT_BODY_LIMIT,
+    // `request.ip` läses ur X-Forwarded-For, `trustProxyHops` hopp bakåt.
+    // Fastify-typerna saknar number-varianten men proxy-addr stöder
+    // hop-count (t.ex. trustProxy: 1) i runtime.
+    // @ts-expect-error se ovan
+    trustProxy: trustProxyHops === 0 ? false : trustProxyHops,
   });
 
   await app.register(cors, { origin: options.corsOrigins });

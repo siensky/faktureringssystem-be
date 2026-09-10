@@ -5,6 +5,7 @@ export {
   type AccessTokenClaims,
 } from "./tokens";
 export { createRequireUser, contextOf } from "./require-user";
+export { resolveCorrelationId } from "./correlation";
 export {
   signServiceToken,
   verifyServiceToken,
@@ -16,6 +17,8 @@ export {
 export {
   createRequireService,
   serviceContextOf,
+  requireTenantHeader,
   type ServiceContext,
+  type TenantActiveCheck,
 } from "./require-service";
 export { getServiceToken, type ServiceTokenClientOptions } from "./service-token-client";
