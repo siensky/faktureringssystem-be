@@ -1,15 +1,30 @@
 // auth-tjänsten. startService() (i @faktura/shared) sköter allt gemensamt
-// bootstrap; configure-hooken nedan registrerar auth-modulens egna routes,
-// events-exchanget och outbox-publishern.
+// bootstrap; configure-hooken nedan registrerar auth-modulens routes,
+// M2M- och BankID-modulerna, events-exchanget och outbox-publishern.
 
-import { createLogger, startService } from "@faktura/shared";
+import {
+  createLogger,
+  createRequireService,
+  createRequireUser,
+  startService,
+} from "@faktura/shared";
 import { registerAuthRoutes } from "./auth/routes";
 import { createAuthService } from "./auth/services";
+import { MockBankIdProvider } from "./bankid/provider";
+import { registerBankIdRoutes } from "./bankid/routes";
+import { createBankIdService } from "./bankid/services";
 import { SERVICE_NAME, config } from "./config";
 import { sql } from "./db";
+import { registerInternalFixtures } from "./internal";
+import { registerM2mRoutes } from "./m2m/routes";
+import { createM2mService } from "./m2m/services";
 import { EVENTS_EXCHANGE, startOutboxPublisher } from "./outbox";
 
 const logger = createLogger(SERVICE_NAME);
+
+const strictLimit = {
+  config: { rateLimit: { max: config.strictRateLimitMax, timeWindow: "1 minute" } },
+};
 
 startService({
   serviceName: SERVICE_NAME,
@@ -29,11 +44,27 @@ startService({
   configure: async (app, ctx) => {
     await ctx.rabbit.channel.assertExchange(EVENTS_EXCHANGE, "topic", { durable: true });
 
-    const service = createAuthService({ sql, redis: ctx.redis, config, logger });
-    registerAuthRoutes(app, service, {
+    const requireUser = createRequireUser(config.jwtUserSecret);
+    const requireService = createRequireService(config.jwtServiceSecret);
+
+    const authService = createAuthService({ sql, redis: ctx.redis, config, logger });
+    registerAuthRoutes(app, authService, {
       devEndpointsEnabled: config.devEndpointsEnabled,
       strictRateLimitMax: config.strictRateLimitMax,
     });
+
+    const m2mService = createM2mService({ sql, config });
+    registerM2mRoutes(app, m2mService, strictLimit);
+
+    const bankIdService = createBankIdService({
+      sql,
+      redis: ctx.redis,
+      config,
+      provider: new MockBankIdProvider(ctx.redis),
+    });
+    registerBankIdRoutes(app, bankIdService, strictLimit);
+
+    registerInternalFixtures(app, { requireUser, requireService });
 
     const publisher = startOutboxPublisher({
       sql,

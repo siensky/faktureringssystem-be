@@ -10,7 +10,9 @@ const required = loadEnv([
   "RABBITMQ_URL",
   "REDIS_URL",
   "JWT_USER_SECRET",
+  "JWT_SERVICE_SECRET",
   "AUTH_TOKEN_PEPPER",
+  "PNR_HMAC_KEY",
 ] as const);
 
 const optional = loadEnvWithDefaults({
@@ -31,7 +33,9 @@ export const config = {
   rabbitmqUrl: required.RABBITMQ_URL,
   redisUrl: required.REDIS_URL,
   jwtUserSecret: required.JWT_USER_SECRET,
+  jwtServiceSecret: required.JWT_SERVICE_SECRET,
   tokenPepper: required.AUTH_TOKEN_PEPPER,
+  pnrHmacKey: required.PNR_HMAC_KEY,
   isProduction: optional.NODE_ENV === "production",
   // Dev-endpoints (t.ex. att hämta en verifieringstoken utan mejl) kräver
   // BÅDE att vi inte är i produktion OCH en explicit flagga — samma

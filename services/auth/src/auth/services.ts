@@ -19,6 +19,7 @@ import type { config as Config } from "../config";
 import { SERVICE_NAME } from "../config";
 import { writeEvent } from "../outbox";
 import { generateToken, hashPassword, hashToken, verifyPassword } from "../passwords";
+import { createSessionIssuer } from "../session";
 import { assertNotLockedOut, clearLoginFailures, recordLoginFailure } from "../throttle";
 import { OK, toTokenPairResponse } from "./mappers";
 import { createAuthRepository } from "./repository";
@@ -36,6 +37,7 @@ const norm = (email: string) => email.trim().toLowerCase();
 export function createAuthService(deps: Deps) {
   const { sql, redis, config, logger } = deps;
   const repo = createAuthRepository(sql);
+  const sessionIssuer = createSessionIssuer({ sql, config });
 
   // Argon2-hash att verifiera mot när användaren inte finns, så svarstiden
   // inte skvallrar om en e-post existerar (planens enumereringsskydd).
@@ -158,22 +160,7 @@ export function createAuthService(deps: Deps) {
       }
       await assertTenantActive(user.tenant_id);
       await clearLoginFailures(redis, email);
-
-      const accessToken = await signAccessToken(
-        { userId: user.id, tenantId: user.tenant_id, role: user.role },
-        config.jwtUserSecret,
-      );
-      const refreshToken = await issueTokenRow(
-        user.id,
-        user.tenant_id,
-        "refresh",
-        config.refreshTtlSeconds,
-      );
-      return toTokenPairResponse({
-        accessToken,
-        refreshToken,
-        expiresIn: USER_TOKEN.ttlSeconds,
-      });
+      return sessionIssuer.issue(user);
     },
 
     async refresh(refreshToken: string) {
