@@ -14,10 +14,10 @@ import redis.asyncio as redis_asyncio
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
-from starlette.middleware.base import BaseHTTPMiddleware
 
 from .config import MissingEnvError, load_settings
 from .logging import configure_logging, get_logger
+from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .rabbitmq import RabbitConnection, connect_rabbitmq, start_system_ping
 
 MAX_BODY_BYTES = 256 * 1024  # 256 KB, samma standard som TS-tjänsterna
@@ -34,33 +34,6 @@ configure_logging(settings.service_name, settings.log_level)
 logger = get_logger()
 
 _state: dict[str, Any] = {}
-
-
-class BodySizeLimitMiddleware(BaseHTTPMiddleware):
-    """Samma 256 KB-standard som TS-tjänsternas Fastify bodyLimit. FastAPI/
-    Starlette har ingen inbyggd global gräns, så vi kollar Content-Length
-    själva innan resten av kedjan rör requesten."""
-
-    async def dispatch(self, request: Request, call_next):
-        content_length = request.headers.get("content-length")
-        if content_length is not None and int(content_length) > MAX_BODY_BYTES:
-            return JSONResponse(
-                status_code=413,
-                content={"success": False, "code": 413, "message": "Request body too large"},
-            )
-        return await call_next(request)
-
-
-class SecurityHeadersMiddleware(BaseHTTPMiddleware):
-    """Motsvarighet till @fastify/helmet i TS-tjänsterna — grundläggande
-    säkerhetsheaders på varje svar."""
-
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        response.headers["X-Content-Type-Options"] = "nosniff"
-        response.headers["X-Frame-Options"] = "DENY"
-        response.headers["Referrer-Policy"] = "no-referrer"
-        return response
 
 
 @asynccontextmanager
@@ -81,6 +54,7 @@ async def lifespan(_app: FastAPI):
     logger.info("documents lyssnar", port=settings.port)
     yield
 
+    ping_state.stop()
     await rabbit.close()
     await redis_client.aclose()
 
@@ -94,7 +68,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(SecurityHeadersMiddleware)
-app.add_middleware(BodySizeLimitMiddleware)
+app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 
 
 @app.exception_handler(Exception)

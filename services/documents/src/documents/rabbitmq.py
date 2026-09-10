@@ -13,7 +13,7 @@ from datetime import UTC, datetime
 from typing import Any
 
 import aio_pika
-from aio_pika.abc import AbstractChannel, AbstractRobustConnection
+from aio_pika.abc import AbstractChannel, AbstractConnection
 
 PING_EXCHANGE = "system.ping"
 PING_INTERVAL_SECONDS = 5
@@ -25,21 +25,33 @@ _background_tasks: set[asyncio.Task] = set()
 
 
 class RabbitConnection:
-    def __init__(self, connection: AbstractRobustConnection, channel: AbstractChannel) -> None:
+    def __init__(self, connection: AbstractConnection, channel: AbstractChannel) -> None:
         self.connection = connection
         self.channel = channel
+        self._healthy = True
+        # Vanlig (icke-robust) anslutning, precis som amqplib.connect() på
+        # TS-sidan: den återansluter INTE automatiskt, så en tappad broker
+        # syns direkt i is_open i stället för att döljas av en robust
+        # klients tysta reconnect-loop. /health/ready ska rapportera
+        # sanningen om beroenden.
+        connection.close_callbacks.add(self._on_close)
+        channel.close_callbacks.add(self._on_close)
+
+    def _on_close(self, *_args: object) -> None:
+        self._healthy = False
 
     async def close(self) -> None:
+        self._healthy = False
         await self.channel.close()
         await self.connection.close()
 
     @property
     def is_open(self) -> bool:
-        return not self.connection.is_closed
+        return self._healthy and not self.connection.is_closed
 
 
 async def connect_rabbitmq(url: str) -> RabbitConnection:
-    connection = await aio_pika.connect_robust(url)
+    connection = await aio_pika.connect(url)
     channel = await connection.channel()
     return RabbitConnection(connection, channel)
 
@@ -47,6 +59,12 @@ async def connect_rabbitmq(url: str) -> RabbitConnection:
 class PingState:
     def __init__(self) -> None:
         self.seen: set[str] = set()
+        self.task: asyncio.Task | None = None
+
+    def stop(self) -> None:
+        """Stoppar den periodiska ping-timern. Anropas vid graceful shutdown."""
+        if self.task is not None:
+            self.task.cancel()
 
 
 async def start_system_ping(
@@ -90,10 +108,17 @@ async def start_system_ping(
         # innan en annan tjänsts kö är bunden går förlorat för den.
         while True:
             await asyncio.sleep(PING_INTERVAL_SECONDS)
-            await publish_ping()
+            try:
+                await publish_ping()
+            except Exception:  # noqa: BLE001
+                # Kanalen kan ha stängts (RabbitMQ nere). Ett fas-0-ping som
+                # inte går fram är ofarligt — sluta försöka, /health/ready
+                # rapporterar problemet.
+                return
 
     await publish_ping()
     task = asyncio.create_task(publish_ping_periodically())
+    state.task = task
     _background_tasks.add(task)
     task.add_done_callback(_background_tasks.discard)
 
