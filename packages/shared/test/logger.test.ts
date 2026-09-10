@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { Writable } from "node:stream";
-import { REDACT_PATHS, createLogger } from "../src/logger";
+import { SENSITIVE_KEYS, createLogger, deepRedact } from "../src/logger";
 
 function captureDestination() {
   const lines: string[] = [];
@@ -14,7 +14,7 @@ function captureDestination() {
 }
 
 describe("createLogger", () => {
-  test("maskerar password, oavsett djup i objektet", () => {
+  test("maskerar password på toppnivå", () => {
     const { lines, destination } = captureDestination();
     const logger = createLogger("auth", {}, destination);
 
@@ -25,25 +25,35 @@ describe("createLogger", () => {
     expect(logged.email).toBe("a@example.com");
   });
 
-  test("maskerar personnummer och tokens", () => {
+  test("maskerar känsliga fält djupt nästlade, inte bara på nivå 0–1", () => {
     const { lines, destination } = captureDestination();
     const logger = createLogger("billing", {}, destination);
 
     logger.info(
       {
         pnr: "19850101-2389",
-        pnrHash: "abc123",
-        refreshToken: "shhh",
-        nested: { accessToken: "also-shhh" },
+        outer: { middle: { inner: { pnr: "19850101-2389", refreshToken: "shhh" } } },
+        list: [{ deep: { password: "nope" } }],
       },
       "test",
     );
 
     const logged = JSON.parse(lines[0]!.trim());
     expect(logged.pnr).toBe("[REDACTED]");
-    expect(logged.pnrHash).toBe("[REDACTED]");
-    expect(logged.refreshToken).toBe("[REDACTED]");
-    expect(logged.nested.accessToken).toBe("[REDACTED]");
+    expect(logged.outer.middle.inner.pnr).toBe("[REDACTED]");
+    expect(logged.outer.middle.inner.refreshToken).toBe("[REDACTED]");
+    expect(logged.list[0].deep.password).toBe("[REDACTED]");
+  });
+
+  test("maskerar Authorization- och Cookie-headers oavsett var de sitter", () => {
+    const { lines, destination } = captureDestination();
+    const logger = createLogger("auth", {}, destination);
+
+    logger.info({ req: { headers: { authorization: "Bearer abc", host: "x" } } }, "test");
+
+    const logged = JSON.parse(lines[0]!.trim());
+    expect(logged.req.headers.authorization).toBe("[REDACTED]");
+    expect(logged.req.headers.host).toBe("x");
   });
 
   test("loggar övriga fält oförändrat", () => {
@@ -66,10 +76,24 @@ describe("createLogger", () => {
     const logged = JSON.parse(lines[0]!.trim());
     expect(logged.name).toBe("documents");
   });
+});
 
-  test("REDACT_PATHS innehåller de känsliga fälten från domain.md #19", () => {
+describe("deepRedact", () => {
+  test("täcker fältnamnen från domain.md #19", () => {
     for (const field of ["password", "token", "refreshToken", "pnr", "pnrHash", "clientSecret"]) {
-      expect(REDACT_PATHS.some((p) => p === field || p === `*.${field}`)).toBe(true);
+      expect(SENSITIVE_KEYS.has(field.toLowerCase())).toBe(true);
     }
+  });
+
+  test("hanterar cirkulära referenser utan att kasta", () => {
+    const obj: Record<string, unknown> = { a: 1 };
+    obj.self = obj;
+    expect(() => deepRedact(obj)).not.toThrow();
+  });
+
+  test("lämnar primitiver orörda", () => {
+    expect(deepRedact(42)).toBe(42);
+    expect(deepRedact("hej")).toBe("hej");
+    expect(deepRedact(null)).toBe(null);
   });
 });

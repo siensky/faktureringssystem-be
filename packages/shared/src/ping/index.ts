@@ -17,6 +17,8 @@ export interface PingMessage {
 export interface PingState {
   /** Namnen på tjänster vi har sett minst ett ping ifrån, inklusive oss själva. */
   seen: Set<string>;
+  /** Stoppar den periodiska ping-timern. Anropas vid graceful shutdown. */
+  stop(): void;
 }
 
 /**
@@ -41,7 +43,7 @@ export async function startSystemPing(
   const { queue } = await channel.assertQueue(queueName, { exclusive: true, autoDelete: true });
   await channel.bindQueue(queue, PING_EXCHANGE, "");
 
-  const state: PingState = { seen: new Set() };
+  const state: PingState = { seen: new Set(), stop: () => {} };
 
   channel.consume(queue, (msg) => {
     if (!msg) return;
@@ -52,10 +54,18 @@ export async function startSystemPing(
   });
 
   const publishPing = () => {
-    const ping: PingMessage = { service: serviceName, occurredAt: new Date().toISOString() };
-    channel.publish(PING_EXCHANGE, "", Buffer.from(JSON.stringify(ping)), {
-      contentType: "application/json",
-    });
+    try {
+      const ping: PingMessage = { service: serviceName, occurredAt: new Date().toISOString() };
+      channel.publish(PING_EXCHANGE, "", Buffer.from(JSON.stringify(ping)), {
+        contentType: "application/json",
+      });
+    } catch {
+      // channel.publish() kastar synkront om kanalen stängts (RabbitMQ
+      // nere). Anropet sker från setInterval utan await, så ett ohanterat
+      // fel här dödar hela processen. Ett fas-0-ping som inte går fram är
+      // ofarligt — sluta försöka och låt /health/ready rapportera problemet.
+      state.stop();
+    }
   };
 
   // Ett enda ping vid uppstart räcker inte: fyra tjänster startar parallellt
@@ -65,7 +75,9 @@ export async function startSystemPing(
   // /internal/debug/pings-seen konvergerar mot alla fyra oavsett
   // startordning, i stället för att bero på ett lyckträff i timing.
   publishPing();
-  setInterval(publishPing, PING_INTERVAL_MS).unref();
+  const timer = setInterval(publishPing, PING_INTERVAL_MS);
+  timer.unref();
+  state.stop = () => clearInterval(timer);
 
   return state;
 }

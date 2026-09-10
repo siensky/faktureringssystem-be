@@ -5,11 +5,18 @@
 // den affärsevent-envelope som packages/contracts definierar, eftersom ett
 // ping inte är en affärshändelse och saknar tenant (se architecture.md).
 
-import amqplib, { type ChannelModel, type Channel, type ConsumeMessage } from "amqplib";
+import amqplib, { type Channel, type ChannelModel, type ConsumeMessage } from "amqplib";
 
 export interface RabbitConnection {
   connection: ChannelModel;
   channel: Channel;
+  /**
+   * `false` så fort brokern stängt anslutningen eller kanalen, eller ett
+   * anslutningsfel inträffat. `/health/ready` läser den här — amqplib har
+   * inget pålitligt synkront "är den öppen?"-API, men den skickar `close`-
+   * och `error`-event, och det är dem vi speglar hit.
+   */
+  isHealthy(): boolean;
   close(): Promise<void>;
 }
 
@@ -17,10 +24,21 @@ export async function connectRabbitMQ(url: string): Promise<RabbitConnection> {
   const connection = await amqplib.connect(url);
   const channel = await connection.createChannel();
 
+  let healthy = true;
+  const markUnhealthy = () => {
+    healthy = false;
+  };
+  connection.on("close", markUnhealthy);
+  connection.on("error", markUnhealthy);
+  channel.on("close", markUnhealthy);
+  channel.on("error", markUnhealthy);
+
   return {
     connection,
     channel,
+    isHealthy: () => healthy,
     async close() {
+      healthy = false;
       await channel.close();
       await connection.close();
     },
