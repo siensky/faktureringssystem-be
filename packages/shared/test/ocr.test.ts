@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveOcr, isValidOcr } from "../src/domain/ocr";
+import { deriveOcr, isValidOcr } from "../src/ocr";
 
 // Oberoende Luhn-validator (klassisk vänster-till-höger-variant) för att
 // korskontrollera deriveOcr utan att återanvända dess egen implementation.

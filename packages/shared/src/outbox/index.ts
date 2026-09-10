@@ -17,6 +17,12 @@ export const EVENTS_EXCHANGE = "events";
 
 const POLL_INTERVAL_MS = 1000;
 const BATCH_SIZE = 20;
+// Publiceringstransaktionen håller radlås på hela batchen medan den
+// väntar på brokerns confirm. En hängd broker får inte pinna den (och
+// därmed vacuum/xmin) hur länge som helst — varje confirm-väntan
+// tidsbegränsas, och första timeouten avbryter resten av batchen så vi
+// inte sitter kvar i timeout * BATCH_SIZE.
+const PUBLISH_CONFIRM_TIMEOUT_MS = 5000;
 const MAX_ATTEMPTS = 12;
 const BACKOFF_BASE_SECONDS = 5;
 const BACKOFF_CAP_SECONDS = 3600;
@@ -58,6 +64,21 @@ export interface OutboxPublisher {
   stop(): void;
 }
 
+class PublishTimeoutError extends Error {
+  constructor() {
+    super(`Brokern bekräftade inte inom ${PUBLISH_CONFIRM_TIMEOUT_MS} ms`);
+    this.name = "PublishTimeoutError";
+  }
+}
+
+function withConfirmTimeout<T>(work: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout>;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(new PublishTimeoutError()), PUBLISH_CONFIRM_TIMEOUT_MS);
+  });
+  return Promise.race([work, timeout]).finally(() => clearTimeout(timer)) as Promise<T>;
+}
+
 function backoffSeconds(attempts: number): number {
   return Math.min(BACKOFF_BASE_SECONDS * 2 ** attempts, BACKOFF_CAP_SECONDS);
 }
@@ -91,7 +112,9 @@ export function startOutboxPublisher(opts: {
           FOR UPDATE SKIP LOCKED
         `;
 
+        let brokerStalled = false;
         for (const row of rows) {
+          if (brokerStalled) break; // hängd broker — låt resten vänta till nästa varv
           const envelope: EventEnvelope = {
             eventId: row.event_id,
             eventType: row.event_type,
@@ -102,9 +125,10 @@ export function startOutboxPublisher(opts: {
           };
           try {
             assertValidEnvelope(envelope);
-            await publish(row.event_type, envelope); // väntar på brokerns confirm
+            await withConfirmTimeout(publish(row.event_type, envelope));
             await tx`UPDATE event_outbox SET published_at = now() WHERE event_id = ${row.event_id}`;
           } catch (error) {
+            if (error instanceof PublishTimeoutError) brokerStalled = true;
             const nextAttempts = row.attempts + 1;
             if (nextAttempts >= MAX_ATTEMPTS) {
               await tx`

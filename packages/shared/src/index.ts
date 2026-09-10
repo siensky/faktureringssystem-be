@@ -51,6 +51,14 @@ export {
   type TenantActiveCheck,
   type ServiceTokenClientOptions,
 } from "./auth";
+export { deriveOcr, isValidOcr } from "./ocr";
+export {
+  normalizePnr,
+  isValidPnr,
+  isValidOrgNumber,
+  isValidBankgiro,
+  luhn,
+} from "./swedish-id";
 export {
   encryptField,
   decryptField,

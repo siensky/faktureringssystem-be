@@ -3,7 +3,7 @@
 // 401. Personnumret hashas med samma HMAC-nyckel som customers.pnr_hmac
 // (planens Personnummer-avsnitt) och lagras aldrig i klartext.
 
-import { Forbidden, Unauthorized, hmacField } from "@faktura/shared";
+import { Forbidden, Unauthorized, hmacField, normalizePnr } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import type { config as Config } from "../config";
@@ -29,9 +29,11 @@ export function createBankIdService(deps: Deps) {
       // kostnadsyta (planens Rate limiting-avsnitt). Båda nycklarna
       // inkrementeras vid varje anrop.
       await assertInitRate(deps.redis, `bankid-init:ip:${endUserIp}`);
+      // Kanonisera till 12 siffror så 10- och 12-siffrig form nycklar lika
+      // (samma kanonisering som billing customers.pnr_hmac använder).
       await assertInitRate(
         deps.redis,
-        `bankid-init:pnr:${hmacField(personalNumber, deps.config.pnrHmacKey)}`,
+        `bankid-init:pnr:${hmacField(normalizePnr(personalNumber), deps.config.pnrHmacKey)}`,
       );
       const { orderRef, autoStartToken, qrData } = await deps.provider.init({
         personalNumber,
@@ -47,7 +49,7 @@ export function createBankIdService(deps: Deps) {
         return { status: result.status, hintCode: result.hintCode };
       }
 
-      const pnr = result.completionData!.personalNumber;
+      const pnr = normalizePnr(result.completionData!.personalNumber);
       const pnrHash = hmacField(pnr, deps.config.pnrHmacKey);
       const user = await repo.findBankIdUserByPnrHash(pnrHash);
 
