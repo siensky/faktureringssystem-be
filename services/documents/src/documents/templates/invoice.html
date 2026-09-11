@@ -1,0 +1,234 @@
+<!doctype html>
+<html lang="sv">
+  <head>
+    <meta charset="utf-8" />
+    <title>{{ title }} {{ invoice_number }}</title>
+    <style>
+      @page {
+        size: A4;
+        margin: 20mm 18mm 24mm 18mm;
+        @bottom-center {
+          content: "{{ title }} {{ invoice_number }} · sida " counter(page) " av " counter(pages);
+          font-size: 8pt;
+          color: #666;
+        }
+      }
+
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        font-family: "DejaVu Sans", "Helvetica Neue", Arial, sans-serif;
+        font-size: 10pt;
+        color: #1a1a1a;
+        line-height: 1.45;
+        margin: 0;
+      }
+
+      header {
+        display: flex;
+        justify-content: space-between;
+        align-items: flex-start;
+        border-bottom: 2px solid #1a1a1a;
+        padding-bottom: 8mm;
+        margin-bottom: 8mm;
+      }
+
+      .company-name {
+        font-size: 14pt;
+        font-weight: 700;
+      }
+
+      .doc-title {
+        text-align: right;
+      }
+
+      .doc-title h1 {
+        margin: 0;
+        font-size: 18pt;
+        letter-spacing: 0.5pt;
+      }
+
+      .doc-title.credit h1 {
+        color: #a11;
+      }
+
+      .meta {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8mm;
+      }
+
+      .meta section {
+        width: 48%;
+      }
+
+      .label {
+        font-size: 7.5pt;
+        text-transform: uppercase;
+        letter-spacing: 0.6pt;
+        color: #666;
+        margin-bottom: 1mm;
+      }
+
+      table.lines {
+        width: 100%;
+        border-collapse: collapse;
+        margin-bottom: 6mm;
+      }
+
+      table.lines th {
+        text-align: left;
+        border-bottom: 1px solid #1a1a1a;
+        padding: 2mm 2mm;
+        font-size: 8pt;
+        text-transform: uppercase;
+        letter-spacing: 0.4pt;
+      }
+
+      table.lines td {
+        padding: 2mm 2mm;
+        border-bottom: 0.5px solid #ccc;
+        vertical-align: top;
+      }
+
+      .num {
+        text-align: right;
+        white-space: nowrap;
+      }
+
+      .totals {
+        width: 60mm;
+        margin-left: auto;
+        border-collapse: collapse;
+      }
+
+      .totals td {
+        padding: 1.5mm 2mm;
+      }
+
+      .totals tr.grand td {
+        border-top: 1.5px solid #1a1a1a;
+        font-weight: 700;
+        font-size: 11pt;
+      }
+
+      .payment-box {
+        margin-top: 10mm;
+        border: 1px solid #1a1a1a;
+        padding: 4mm;
+        display: flex;
+        justify-content: space-between;
+      }
+
+      .payment-box .label {
+        margin-bottom: 0.5mm;
+      }
+
+      .payment-box .value {
+        font-size: 11pt;
+        font-weight: 700;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        {% if company.logo_url %}
+          <img src="{{ company.logo_url }}" alt="{{ company.name }}" style="max-height: 20mm" />
+        {% else %}
+          <div class="company-name">{{ company.name }}</div>
+        {% endif %}
+      </div>
+      <div class="doc-title {{ 'credit' if is_credit_note else '' }}">
+        <h1>{{ title }}</h1>
+        <div>Nr {{ invoice_number }}</div>
+      </div>
+    </header>
+
+    <div class="meta">
+      <section>
+        <div class="label">Från</div>
+        <div>{{ company.name }}</div>
+        {% for line in company.address_lines %}<div>{{ line }}</div>{% endfor %}
+        {% if company.org_number %}<div>Org.nr {{ company.org_number }}</div>{% endif %}
+        {% if company.vat_number %}<div>Momsreg.nr {{ company.vat_number }}</div>{% endif %}
+      </section>
+      <section>
+        <div class="label">Till</div>
+        <div>{{ customer.name }}</div>
+        {% for line in customer.address_lines %}<div>{{ line }}</div>{% endfor %}
+        {% if customer.org_number %}<div>Org.nr {{ customer.org_number }}</div>{% endif %}
+      </section>
+    </div>
+
+    <div class="meta">
+      <section>
+        <div class="label">Fakturadatum</div>
+        <div>{{ date_issued }}</div>
+      </section>
+      <section>
+        <div class="label">Förfallodatum</div>
+        <div>{{ date_due }}</div>
+      </section>
+    </div>
+
+    <table class="lines">
+      <thead>
+        <tr>
+          <th>Beskrivning</th>
+          <th class="num">Antal</th>
+          <th class="num">á-pris</th>
+          <th class="num">Moms</th>
+          <th class="num">Belopp exkl. moms</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for line in lines %}
+          <tr>
+            <td>{{ line.description }}</td>
+            <td class="num">{{ line.quantity }} {{ line.unit }}</td>
+            <td class="num">{{ line.unit_price }}</td>
+            <td class="num">{{ line.vat_rate }}</td>
+            <td class="num">{{ line.line_excl_vat }}</td>
+          </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+
+    <table class="totals">
+      <tbody>
+        <tr>
+          <td>Summa exkl. moms</td>
+          <td class="num">{{ total_excl_vat }} {{ currency }}</td>
+        </tr>
+        {% for row in vat_summary %}
+          <tr>
+            <td>Moms {{ row.rate }}</td>
+            <td class="num">{{ row.vat }} {{ currency }}</td>
+          </tr>
+        {% endfor %}
+        <tr class="grand">
+          <td>Att betala</td>
+          <td class="num">{{ total_incl_vat }} {{ currency }}</td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="payment-box">
+      <div>
+        <div class="label">Bankgiro</div>
+        <div class="value">{{ company.bankgiro }}</div>
+      </div>
+      <div>
+        <div class="label">OCR-referens</div>
+        <div class="value">{{ ocr }}</div>
+      </div>
+      <div>
+        <div class="label">Att betala</div>
+        <div class="value">{{ total_incl_vat }} {{ currency }}</div>
+      </div>
+    </div>
+  </body>
+</html>

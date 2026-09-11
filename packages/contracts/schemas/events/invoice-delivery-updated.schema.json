@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://faktureringssystem.se/schemas/events/invoice-delivery-updated.schema.json",
+  "title": "InvoiceDeliveryUpdatedPayload",
+  "description": "Payload för invoice.delivery_updated. Publiceras av documents när en utskicksstatus ändras, och konsumeras av billing som äger invoices.delivery_status. Documents skriver ALDRIG i billings tabeller själv (architecture.md #20) — rapporten går som event till ägande tjänst. deliveryStatus är monoton hos mottagaren: ett försenat delivered får aldrig skriva över ett bounced (domain.md #29).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["invoiceId", "documentType", "deliveryStatus"],
+  "properties": {
+    "invoiceId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Fakturan (eller kreditfakturan) leveransen gäller."
+    },
+    "documentType": {
+      "type": "string",
+      "enum": ["invoice", "credit_note"],
+      "description": "Vilket dokument som skickades. Samma värdemängd som documents.document_type."
+    },
+    "deliveryStatus": {
+      "type": "string",
+      "enum": ["queued", "sent", "delivered", "bounced", "failed"],
+      "description": "Ny leveransstatus. 'none' finns bara som DB-default i billing och rapporteras aldrig."
+    },
+    "bounceType": {
+      "type": "string",
+      "enum": ["hard", "soft"],
+      "description": "Bara vid bounced. En HÅRD studs stänger av framtida utskick genom att billing sätter customers.email_valid = false (domain.md #23); en mjuk studs gör det inte."
+    }
+  }
+}

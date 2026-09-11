@@ -32,6 +32,53 @@ curl -sf -u "$AUTH" -X PUT "$API/exchanges/%2F/events" \
   -H "Content-Type: application/json" \
   -d '{"type":"topic","durable":true}' > /dev/null
 
+# Dead-letter-exchange + en landningskö, deklarerade NU medan kö-argument
+# fortfarande är billiga att sätta. Köargument är OFÖRÄNDERLIGA i
+# RabbitMQ — att lägga till x-dead-letter-exchange senare (fas 7, en
+# riktig retry-policy med larm) skulle kräva att documents.events och
+# billing.events raderas och återskapas. Ingen av konsumenterna nackar
+# (requeue=false) eller sätter en TTL/max-length-policy ännu — det är
+# fas 7:s jobb — så den här kön tar inte emot något i praktiken idag.
+echo "Deklarerar dead-letter-exchanget."
+curl -sf -u "$AUTH" -X PUT "$API/exchanges/%2F/events.dlx" \
+  -H "Content-Type: application/json" \
+  -d '{"type":"fanout","durable":true}' > /dev/null
+curl -sf -u "$AUTH" -X PUT "$API/queues/%2F/events.dlq" \
+  -H "Content-Type: application/json" \
+  -d '{"durable":true}' > /dev/null
+curl -sf -u "$AUTH" -X POST "$API/bindings/%2F/e/events.dlx/q/events.dlq" \
+  -H "Content-Type: application/json" \
+  -d '{}' > /dev/null
+
+# Konsumenternas köer deklareras och BINDS här också, inte lämnat åt varje
+# tjänst att göra vid sin egen uppstart. Ett topic-exchange utan matchande
+# bindning SLÄNGER meddelandet (publisher-confirms bekräftar bara att
+# brokern tog emot det, inte att det ruttades någonstans) — så på ett
+# färskt `docker compose up` (eller i CI) kan billing hinna publicera
+# invoice.sent innan documents-containern startat och bundit sin kö, och
+# eventet är då borta för alltid trots att outboxen säger published_at.
+# Genom att skapa och binda köerna här, INNAN någon tjänst får starta, kan
+# det race:et inte uppstå. Tjänsternas egen queue.bind vid uppstart (se
+# consumer.py/deliveries/consumer.ts) blir då bara en no-op-bekräftelse av
+# en bindning som redan finns (RabbitMQ dedupar identiska bindningar).
+declare_bound_queue() {
+  queue="$1"
+  shift
+  curl -sf -u "$AUTH" -X PUT "$API/queues/%2F/$queue" \
+    -H "Content-Type: application/json" \
+    -d '{"durable":true,"arguments":{"x-dead-letter-exchange":"events.dlx"}}' > /dev/null
+  for routing_key in "$@"; do
+    curl -sf -u "$AUTH" -X POST "$API/bindings/%2F/e/events/q/$queue" \
+      -H "Content-Type: application/json" \
+      -d "{\"routing_key\":\"$routing_key\"}" > /dev/null
+  done
+  echo "  ✓ $queue ($*)"
+}
+
+echo "Deklarerar och binder konsumentköer."
+declare_bound_queue "documents.events" "invoice.sent" "invoice.credited"
+declare_bound_queue "billing.events" "invoice.delivery_updated"
+
 echo "Skapar tjänstekonton."
 
 create_user() {

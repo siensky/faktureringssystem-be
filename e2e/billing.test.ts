@@ -520,6 +520,26 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     ).toBe(409);
   });
 
+  test("kreditering kräver också avsändaruppgifter (422) — samma grind som send", async () => {
+    // Går inte att nå via PUT /admin/company-settings (schemat kräver
+    // icke-tom bankgiro/companyName och har ingen "rensa fältet"-väg) —
+    // fältet blir bara tomt genom en direkt DB-ändring, precis som en
+    // framtida admin-rutin eller migration skulle kunna göra. Beviset är
+    // ändå värt att ha: kreditvägen ska ha SAMMA grind som sendvägen
+    // (PR-granskning fas 4, punkt 26), inte lita på att fältet råkar
+    // förbli ifyllt för evigt.
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+    const draft = await createDraft(s, customerId);
+    expect((await send(s, draft.id)).status).toBe(200);
+
+    await sql`UPDATE company_settings SET bankgiro = NULL WHERE tenant_id = ${s.tenantId}`;
+
+    const credit = await postTo(BILLING_URL, `/admin/invoices/${draft.id}/credit`, {}, idem(s));
+    expect(credit.status).toBe(422);
+  });
+
   test("tenant-isolering: företag B får 404 på företag A:s faktura överallt", async () => {
     await fillCompanySettings(A);
     const customerId = await makeCustomer(A);

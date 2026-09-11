@@ -1,0 +1,10 @@
+{
+  "eventId": "1a2b3c4d-0001-4000-8000-000000000001",
+  "eventType": "invoice.sent",
+  "tenantId": 1,
+  "correlationId": "3c9c1a2e-6c5f-4e0e-9d3b-1a2b3c4d5e6f",
+  "occurredAt": "2026-09-10T08:15:00.000Z",
+  "payload": {
+    "invoiceId": 42
+  }
+}

@@ -46,11 +46,14 @@ async function main() {
     f.endsWith(".schema.json"),
   );
   for (const file of eventFiles) {
-    const typeName = file
+    // schemas/events/ innehåller PAYLOADEN per eventtyp, inte hela
+    // eventet — därför suffixet: invoice-sent.schema.json blir
+    // InvoiceSentPayload i invoice-sent.ts.
+    const typeName = `${file
       .replace(".schema.json", "")
       .split(/[-_]/)
       .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-      .join("");
+      .join("")}Payload`;
     const outFileName = file.replace(".schema.json", ".ts");
     await generateOne(join("schemas", "events", file), typeName, outFileName);
   }
