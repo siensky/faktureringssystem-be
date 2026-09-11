@@ -65,6 +65,16 @@ async function main(): Promise<void> {
         .filter(Boolean),
       description: "documents-tjänsten: läser snapshot/kund/företag för PDF-rendering (fas 4)",
     },
+    {
+      clientId: required("PAYMENTS_CLIENT_ID"),
+      clientSecret: required("PAYMENTS_CLIENT_SECRET"),
+      // Minsta möjliga scope (architecture.md #18): bankgiro->tenant och
+      // OCR/id->aktuell faktura, inget mer.
+      scopes: (process.env.PAYMENTS_CLIENT_SCOPES ?? "billing:company:read billing:invoice:read")
+        .split(/\s+/)
+        .filter(Boolean),
+      description: "payments-tjänsten: bankgiro->tenant och OCR/id->faktura för matchning (fas 5)",
+    },
   ];
 
   const sql = postgres(databaseUrl, { max: 1 });

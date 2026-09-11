@@ -73,4 +73,12 @@ export function registerInvoiceRoutes(
     },
     c.byOcr,
   );
+  app.get<{ Params: { id: number } }>(
+    "/internal/invoices/:id/current",
+    {
+      preHandler: deps.requireService("billing:invoice:read"),
+      schema: { params: schema.invoiceIdParams },
+    },
+    c.current,
+  );
 }

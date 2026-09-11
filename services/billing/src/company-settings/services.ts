@@ -12,7 +12,7 @@ import {
 import type { Sql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { defaultAdminView, toAdminView, toInternalView } from "./mappers";
-import { CompanySettingsRepository } from "./repository";
+import { CompanySettingsRepository, findTenantIdByBankgiro } from "./repository";
 import type { CompanySettingsPatch } from "./types";
 
 export function createCompanySettingsService(sql: Sql) {
@@ -73,6 +73,17 @@ export function createCompanySettingsService(sql: Sql) {
       const row = await repo(ctx).find();
       if (!row) throw new NotFound("Inga företagsuppgifter för den här tenanten");
       return toInternalView(row);
+    },
+
+    /**
+     * S2S: bankgiro -> tenant, till payments matchningsmotor (fas 5-planen
+     * avsnitt 2). Ingen RequestContext här — det ÄR det här anropets jobb
+     * att avgöra tenanten, inte att förutsätta en.
+     */
+    async resolveTenantByBankgiro(bankgiro: string) {
+      const tenantId = await findTenantIdByBankgiro(sql, bankgiro);
+      if (tenantId === undefined) throw new NotFound("Inget bankgiro matchar en tenant");
+      return { tenantId };
     },
   };
 }

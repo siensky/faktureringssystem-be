@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://faktureringssystem.se/schemas/events/payment-matched.schema.json",
+  "title": "PaymentMatchedPayload",
+  "description": "Payload för payment.matched. Publiceras av payments när en inkommande banktransaktion helt täcker fakturans kvarstående belopp (amountOre == remainingOre). billing konsumerar eventet och skriver den faktiska raden i invoice_payments (architecture.md #20 — payments skriver aldrig billings tabeller direkt). Eventtypen är bara informativ: billing räknar alltid om paid_ore via SUM och avgör status='paid' från det, aldrig från eventnamnet.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["invoiceId", "amountOre", "paymentId", "bookedAt"],
+  "properties": {
+    "invoiceId": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Aktuell faktura efter kedjeföljning av superseded_by_invoice_id — inte nödvändigtvis den faktura OCR:et ursprungligen pekade på."
+    },
+    "amountOre": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Beloppet som ska bokföras, i öre. Verifierat mot en LEVANDE remainingOre-läsning i payments innan eventet publicerades (domain.md #27)."
+    },
+    "paymentId": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Payments egen identitet för transaktionen (\"<source>:<externalId>\"), unik per rad i bank_transactions. Grunden för billings ON CONFLICT-dedup i invoice_payments."
+    },
+    "bookedAt": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Bankens egen bokföringstidpunkt för transaktionen (bank_transactions.booked_at), inte tidpunkten billing råkar hantera eventet. Utan den skulle invoice_payments.booked_at falla tillbaka på \"när billing bearbetade eventet\", vilket är fel data för en betalning som importeras dagar i efterhand."
+    }
+  }
+}

@@ -77,3 +77,24 @@ export class CompanySettingsRepository extends TenantScopedRepository {
     `;
   }
 }
+
+/**
+ * Bankgiro -> tenant. Fristående funktion, INTE en metod på
+ * CompanySettingsRepository: klassens tenantId-getter kastar innan
+ * tenanten ens är känd (fail closed, architecture.md #21) — men att slå
+ * upp tenanten är precis vad det här anropet ska göra. Fas 5-planen,
+ * avsnitt 2, dokumenterar avvikelsen från "allt går via
+ * repository-klassen" uttryckligen.
+ *
+ * Det partiella unika indexet company_settings_bankgiro_key
+ * (migrations/0006_payments.js) garanterar högst en träff.
+ */
+export async function findTenantIdByBankgiro(
+  sql: Sql,
+  bankgiro: string,
+): Promise<number | undefined> {
+  const [row] = await sql<{ tenant_id: number }[]>`
+    SELECT tenant_id FROM company_settings WHERE bankgiro = ${bankgiro} LIMIT 1
+  `;
+  return row?.tenant_id;
+}

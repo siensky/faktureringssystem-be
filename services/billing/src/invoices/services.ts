@@ -70,6 +70,24 @@ const amountsOf = (it: InsertItemData): LineAmounts => ({
   lineInclVatOre: it.lineInclVatOre,
 });
 
+/**
+ * Följer superseded_by_invoice_id från startRow till kedjans slut (planens
+ * Domänmodell #3). Delad av resolveByOcr (startar från findByOcr) och
+ * resolveById (startar från findByIdBasic) — payments bokför alltid på
+ * kedjans slut, inte på den faktura anroparen faktiskt pekade på.
+ */
+async function resolveCurrent(repo: InvoiceRepository, startRow: InvoiceRow): Promise<InvoiceRow> {
+  let current = startRow;
+  const guard = new Set<number>([current.id]);
+  while (current.superseded_by_invoice_id) {
+    const next = await repo.findByIdBasic(current.superseded_by_invoice_id);
+    if (!next || guard.has(next.id)) break;
+    guard.add(next.id);
+    current = next;
+  }
+  return current;
+}
+
 /** Kastar om datumen är orimliga. dateIssued får inte ligga i framtiden. */
 function assertDates(dateIssued: string, dateDue: string): void {
   if (dateIssued > todayInStockholm()) {
@@ -405,15 +423,7 @@ export function createInvoiceService(sql: Sql) {
       const repo = invRepo(ctx);
       const matched = await repo.findByOcr(ocr);
       if (!matched) throw new NotFound("Ingen faktura med det OCR-numret");
-
-      let current = matched;
-      const guard = new Set<number>([current.id]);
-      while (current.superseded_by_invoice_id) {
-        const next = await repo.findByIdBasic(current.superseded_by_invoice_id);
-        if (!next || guard.has(next.id)) break;
-        guard.add(next.id);
-        current = next;
-      }
+      const current = await resolveCurrent(repo, matched);
 
       const paidOre = await repo.paidOre(current.id);
       const totalInclVatOre = Number(current.total_incl_vat_ore);
@@ -421,6 +431,31 @@ export function createInvoiceService(sql: Sql) {
         matchedInvoiceId: matched.id,
         currentInvoiceId: current.id,
         ocr,
+        customerId: current.customer_id,
+        status: current.status,
+        currency: current.currency,
+        totalInclVatOre,
+        paidOre,
+        remainingOre: totalInclVatOre - paidOre,
+      };
+    },
+
+    /**
+     * S2S: id -> aktuell faktura, med samma kedjeföljning som
+     * resolveByOcr. Används av payments admin-matchning för att verifiera
+     * ett admin-angivet invoiceId mot en LEVANDE remainingOre (domain.md
+     * #27) i stället för ett klientskickat belopp.
+     */
+    async resolveById(ctx: RequestContext, id: number) {
+      const repo = invRepo(ctx);
+      const start = await repo.findByIdBasic(id);
+      if (!start) throw new NotFound("Fakturan finns inte");
+      const current = await resolveCurrent(repo, start);
+
+      const paidOre = await repo.paidOre(current.id);
+      const totalInclVatOre = Number(current.total_incl_vat_ore);
+      return {
+        currentInvoiceId: current.id,
         customerId: current.customer_id,
         status: current.status,
         currency: current.currency,

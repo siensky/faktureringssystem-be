@@ -1,0 +1,13 @@
+{
+  "eventId": "1a2b3c4d-0005-4000-8000-000000000001",
+  "eventType": "payment.matched",
+  "tenantId": 1,
+  "correlationId": "3c9c1a2e-6c5f-4e0e-9d3b-1a2b3c4d5e6f",
+  "occurredAt": "2026-09-11T08:15:00.000Z",
+  "payload": {
+    "invoiceId": 42,
+    "amountOre": 150000,
+    "paymentId": "webhook:mockbank:evt_1",
+    "bookedAt": "2026-09-10T07:00:00.000Z"
+  }
+}

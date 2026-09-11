@@ -78,6 +78,15 @@ declare_bound_queue() {
 echo "Deklarerar och binder konsumentköer."
 declare_bound_queue "documents.events" "invoice.sent" "invoice.credited"
 declare_bound_queue "billing.events" "invoice.delivery_updated"
+# EGEN kö, inte fler routing keys på billing.events: två separat
+# REGISTRERADE konsumenter (deliveries/consumer.ts och payments/consumer.ts)
+# på SAMMA kö skulle få RabbitMQ att round-robina meddelanden mellan dem
+# oavsett routing key — payment.matched kunde då hämtas av
+# leveranskonsumenten (som inte känner igen eventtypen) och tvärtom,
+# ungefär hälften av gångerna. En kö per konsument-registrering håller
+# fördelningen deterministisk (fas 5-planens avsnitt 3.2 nämnde
+# ursprungligen en delad kö — det här är en medveten, granskad avvikelse).
+declare_bound_queue "billing.payments.events" "payment.matched" "payment.partial"
 
 echo "Skapar tjänstekonton."
 

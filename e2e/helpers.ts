@@ -6,12 +6,15 @@ import { createHmac } from "node:crypto";
 export const AUTH_URL = process.env.AUTH_URL ?? "http://localhost:4001";
 export const BILLING_URL = process.env.BILLING_URL ?? "http://localhost:4002";
 export const DOCUMENTS_URL = process.env.DOCUMENTS_URL ?? "http://localhost:4004";
+export const PAYMENTS_URL = process.env.PAYMENTS_URL ?? "http://localhost:4003";
 export const MAILPIT_URL = process.env.MAILPIT_URL ?? "http://localhost:8025";
 export const DB_URL =
   process.env.E2E_DATABASE_URL ?? "postgresql://sienna:changeme@localhost:5434/invoice_db";
 export const MQ_URL = process.env.E2E_RABBITMQ_URL ?? "amqp://admin:changeme@localhost:5672";
 export const EMAIL_WEBHOOK_SECRET =
   process.env.E2E_EMAIL_WEBHOOK_SECRET ?? "changeme-email-webhook";
+export const PAYMENT_WEBHOOK_SECRET =
+  process.env.E2E_PAYMENT_WEBHOOK_SECRET ?? "changeme-payment-webhook";
 export const PNR_HMAC_KEY =
   process.env.E2E_PNR_HMAC_KEY ??
   "1111111111111111111111111111111111111111111111111111111111111111";
@@ -137,6 +140,15 @@ export function hmacField(value: string, keyHex: string): string {
  * inte hex) — speglar documents/src/documents/webhooks.py verify_signature.
  */
 export function signEmailWebhook(secret: string, timestamp: string, body: string): string {
+  return createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
+}
+
+/**
+ * Signaturen för POST /webhooks/payment: samma "<timestamp>.<rå body>"-
+ * konstruktion som signEmailWebhook, med PAYMENT_WEBHOOK_SECRET som
+ * nyckel — speglar services/payments/src/webhooks/signature.ts.
+ */
+export function signPaymentWebhook(secret: string, timestamp: string, body: string): string {
   return createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
 }
 

@@ -29,3 +29,13 @@ export const updateCompanySettingsBody = {
     paymentTermsDays: { type: "integer", minimum: 0, maximum: 365 },
   },
 } as const;
+
+// Grov formkontroll (7-8 siffror) — samma gräns som isValidBankgiro i
+// @faktura/shared. Exakt Luhn-validering görs inte här; ett bankgiro som
+// inte matchar någon tenant ger bara 404, samma som ett obefintligt id.
+export const byBankgiroQuery = {
+  type: "object",
+  additionalProperties: false,
+  required: ["bankgiro"],
+  properties: { bankgiro: { type: "string", pattern: "^[0-9]{7,8}$" } },
+} as const;

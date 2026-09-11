@@ -92,5 +92,16 @@ export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
         ),
       );
     },
+
+    async current(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {
+      const tenantId = requireTenantHeader(request);
+      const svc = serviceContextOf(request);
+      return reply.send(
+        await service.resolveById(
+          { userId: 0, tenantId, role: "admin", correlationId: svc.correlationId },
+          request.params.id,
+        ),
+      );
+    },
   };
 }
