@@ -135,8 +135,20 @@ def document_type_of(snapshot: dict[str, Any]) -> str:
 
 def render_pdf(snapshot: dict[str, Any]) -> bytes:
     """Renderar snapshoten till PDF-bytes. Lazy import av WeasyPrint så att
-    modulen (och dess enhetstester) inte kräver pango/cairo."""
+    modulen (och dess enhetstester) inte kräver pango/cairo.
+
+    url_fetcher=build_safe_fetcher() LÅST till https mot publika adresser
+    — se safe_fetch.py. company.logo_url i mallen är ovaliderad
+    admin-fritext; utan detta är WeasyPrints default url_fetcher en
+    komplett läs-SSRF (file://, molnmetadata, interna tjänster) rakt in i
+    en PDF som mejlas till kunden och läggs i S3. fail_on_errors=False
+    (satt i build_safe_fetcher) gör att en blockerad/trasig bild bara
+    hoppas över — resten av fakturan renderas ändå."""
     from weasyprint import HTML
 
+    from .safe_fetch import build_safe_fetcher
+
     html = _env.get_template("invoice.html").render(**build_template_context(snapshot))
-    return HTML(string=html, base_url=str(_TEMPLATES_DIR)).write_pdf()
+    return HTML(
+        string=html, base_url=str(_TEMPLATES_DIR), url_fetcher=build_safe_fetcher()
+    ).write_pdf()
