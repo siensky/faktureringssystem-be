@@ -38,6 +38,16 @@ def test_saknad_signatur_ar_inte_giltig():
     assert not verify_signature(secret=_SECRET, timestamp="1", raw_body=b"{}", signature="")
 
 
+def test_icke_ascii_signatur_ger_401_inte_500():
+    # Starlette avkodar headers som latin-1 — X-Signature kan alltså bära
+    # tecken utanför ASCII. hmac.compare_digest(str, str) KASTAR TypeError
+    # på det i stället för att bara returnera False, vilket utan fix skulle
+    # bli ett 500 på en publik endpoint (PR-granskning fas 4, punkt 22).
+    assert not verify_signature(
+        secret=_SECRET, timestamp="1", raw_body=b"{}", signature="\xff\xff\xff"
+    )
+
+
 def test_tidsstampel_inom_fonstret():
     now = 1_000_000.0
     assert timestamp_fresh(str(int(now)), now=now, tolerance=300)
@@ -54,10 +64,13 @@ def test_ickenumerisk_tidsstampel_avvisas():
 
 
 def test_lagre_rankade_statusar_for_delivered():
-    # delivered (rank 3) får bara nås från queued/sent.
-    assert set(_lower_ranked_statuses("delivered")) == {"queued", "sent"}
+    # delivered får nås från queued/sent/failed — men INTE från bounced
+    # (det andra terminala utfallet), och inte från sig självt.
+    assert set(_lower_ranked_statuses("delivered")) == {"queued", "sent", "failed"}
 
 
 def test_lagre_rankade_statusar_for_bounced():
-    # bounced (rank 5) får nås från allt lägre — men aldrig från sig självt.
+    # bounced (det mest auktoritativa utfallet) får nås från allt lägre,
+    # inklusive delivered (domain.md #29: en sen, korrigerande hård studs
+    # vinner ändå) — men aldrig från sig självt.
     assert set(_lower_ranked_statuses("bounced")) == {"queued", "sent", "delivered", "failed"}

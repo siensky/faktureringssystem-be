@@ -90,11 +90,15 @@ export function assertValidPayload(eventType: string, payload: unknown): void {
   }
 }
 
-/** Som assertValidPayload, men returnerar false i stället för att kasta. */
+/**
+ * Som assertValidPayload, men returnerar false för OGILTIG DATA i stället
+ * för att kasta. Ett SAKNAT schema (fel i koden, inte i datan — se
+ * payloadValidator ovan) kastar ÄNDÅ PayloadValidationError, i stället för
+ * att tyst bli samma "false" som en payload som bara råkar vara felformad
+ * — de två fallen ska inte gå att förväxla (PR-granskning fas 4,
+ * punkt 24).
+ */
 export function isValidPayload(eventType: string, payload: unknown): boolean {
-  try {
-    return payloadValidator(eventType)(payload) === true;
-  } catch {
-    return false;
-  }
+  const validate = payloadValidator(eventType); // kastar PayloadValidationError om schemat saknas
+  return validate(payload) === true;
 }

@@ -69,8 +69,11 @@ describe("payload per eventtyp (kontrakt delat med Python)", () => {
     expect(isValidPayload("invoice.sent", { invoiceId: 1, extra: true })).toBe(false);
   });
 
-  test("en eventtyp utan schema är ett kodfel, inte en tyst genomsläppning", () => {
+  test("en eventtyp utan schema är ett kodfel, inte en tyst genomsläppning — i BÅDA funktionerna", () => {
     expect(() => assertValidPayload("invoice.nonexistent", {})).toThrow(/inget schema/);
-    expect(isValidPayload("invoice.nonexistent", {})).toBe(false);
+    // isValidPayload "returnerar false i stället för att kasta" gäller
+    // OGILTIG DATA, inte ett saknat schema — annars kan en felstavad
+    // eventtyp inte skiljas från en payload som bara råkar vara felformad.
+    expect(() => isValidPayload("invoice.nonexistent", {})).toThrow(/inget schema/);
   });
 });

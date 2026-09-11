@@ -1,18 +1,21 @@
 // Enhetstest för den monotona rankningen av delivery_status (domain.md
-// #29). Ren funktion — ingen DB. Det villkorade UPDATE:t i
-// DeliveryRepository.advanceDeliveryStatus använder samma ordning uttryckt
-// i SQL, så den regeln får sitt bevis i e2e-sviten.
+// #29). Ordningen kommer från packages/contracts/schemas/
+// delivery-status-rank.json — SAMMA fil dokuments Python-sida läser — så
+// det här testet bevisar samtidigt att importvägen fungerar, inte bara att
+// en lokal konstant råkar vara sorterad rätt. Det villkorade UPDATE:t i
+// DeliveryRepository.advanceDeliveryStatus använder array_position() på
+// exakt den här ordningen, så SQL:en kan aldrig glida isär från TS-testet.
 
 import { describe, expect, test } from "bun:test";
+import { DELIVERY_STATUS_ORDER } from "@faktura/contracts";
 import { deliveryRank } from "../src/deliveries/repository";
-import type { DeliveryStatus } from "../src/invoices/types";
-
-const ORDER: DeliveryStatus[] = ["none", "queued", "sent", "delivered", "failed", "bounced"];
 
 describe("deliveryRank — monoton ordning", () => {
-  test("rankningen är strikt stigande i livscykelordning", () => {
-    for (let i = 1; i < ORDER.length; i++) {
-      expect(deliveryRank(ORDER[i]!)).toBeGreaterThan(deliveryRank(ORDER[i - 1]!));
+  test("rankningen är strikt stigande i den delade ordningen", () => {
+    for (let i = 1; i < DELIVERY_STATUS_ORDER.length; i++) {
+      expect(deliveryRank(DELIVERY_STATUS_ORDER[i]!)).toBeGreaterThan(
+        deliveryRank(DELIVERY_STATUS_ORDER[i - 1]!),
+      );
     }
   });
 
@@ -21,8 +24,23 @@ describe("deliveryRank — monoton ordning", () => {
     expect(deliveryRank("delivered")).toBeLessThan(deliveryRank("bounced"));
   });
 
-  test("bounced rankas över failed — en studs är ett starkare besked", () => {
-    expect(deliveryRank("bounced")).toBeGreaterThan(deliveryRank("failed"));
+  test("failed kan INTE skriva över delivered — ett bekräftat mottaget mejl är inte 'misslyckat'", () => {
+    // Ett förgiftat/ur-ordning-levererat webhook-event som rapporterar
+    // 'failed' efter att providern redan bekräftat 'delivered' ska inte
+    // kunna nedgradera statusen (PR-granskning fas 4, punkt 9).
+    expect(deliveryRank("failed")).toBeLessThan(deliveryRank("delivered"));
+  });
+
+  test("failed kan INTE skriva över bounced", () => {
+    expect(deliveryRank("failed")).toBeLessThan(deliveryRank("bounced"));
+  });
+
+  test("delivered och bounced (de två terminala utfallen) rankas högst", () => {
+    const nonTerminal = DELIVERY_STATUS_ORDER.filter((s) => s !== "delivered" && s !== "bounced");
+    for (const s of nonTerminal) {
+      expect(deliveryRank(s)).toBeLessThan(deliveryRank("delivered"));
+      expect(deliveryRank(s)).toBeLessThan(deliveryRank("bounced"));
+    }
   });
 
   test("en försenad 'sent' kan inte nedgradera 'delivered'", () => {
@@ -32,8 +50,12 @@ describe("deliveryRank — monoton ordning", () => {
   test("rankningen är deterministisk — en omleverans av samma status ger samma rank", () => {
     // advanceDeliveryStatus skriver bara när ny rank > nuvarande rank, så
     // två likadana rapporter ger ingen andra skrivning.
-    for (const s of ORDER) {
+    for (const s of DELIVERY_STATUS_ORDER) {
       expect(deliveryRank(s)).toBe(deliveryRank(s));
     }
+  });
+
+  test("okänd status kastar", () => {
+    expect(() => deliveryRank("opened")).toThrow(/okänd delivery-status/);
   });
 });

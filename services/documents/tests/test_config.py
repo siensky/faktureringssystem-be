@@ -30,11 +30,24 @@ def test_load_settings_med_alla_nycklar():
     assert settings.auth_base_url == "http://auth:4001"
     # publikt S3-endpoint faller tillbaka på det interna om inte satt
     assert settings.s3_public_endpoint == "http://minio:9000"
-    assert settings.documents_client_scopes == [
-        "billing:invoice:read",
-        "billing:company:read",
-        "billing:customer:read",
-    ]
+    # Minsta möjliga scope (architecture.md #18) — BillingClient anropar
+    # bara snapshot-endpointen.
+    assert settings.documents_client_scopes == ["billing:invoice:read"]
+    # Mailpit-defaultar: ingen TLS, ingen autentisering.
+    assert settings.smtp_start_tls is False
+    assert settings.smtp_username is None
+    assert settings.smtp_password is None
+
+
+def test_smtp_tls_och_auth_kan_sattas_for_en_riktig_leverantor():
+    env = dict(_FULL_ENV)
+    env["SMTP_START_TLS"] = "true"
+    env["SMTP_USERNAME"] = "apikey"
+    env["SMTP_PASSWORD"] = "hemligt"
+    settings = load_settings(env)
+    assert settings.smtp_start_tls is True
+    assert settings.smtp_username == "apikey"
+    assert settings.smtp_password == "hemligt"
 
 
 @pytest.mark.parametrize(

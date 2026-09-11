@@ -97,6 +97,11 @@ export function createInvoiceService(sql: Sql) {
    * Tar radlåset på nummerserien och returnerar numret, OCR:et och den
    * låsta company_settings-raden (som kreditvägen behöver för snapshoten).
    * Anropa sent i tx:en så låset hålls kort.
+   *
+   * Samma avsändaruppgifts-grind som sendInTx: en kreditfaktura får också
+   * en PDF (domain.md #35), så en admin som blankar ut bankgirot MELLAN
+   * att originalet skickades och att det krediteras ska inte kunna
+   * producera en trasig kreditfaktura-PDF (PR-granskning fas 4, punkt 26).
    */
   async function allocateNumber(
     ctx: RequestContext,
@@ -104,6 +109,11 @@ export function createInvoiceService(sql: Sql) {
   ): Promise<{ number: number; ocr: string; settings: CompanySettingsRow }> {
     const settingsRepo = csRepo(ctx);
     const settings = await settingsRepo.lockForUpdate(tx);
+    if (!settings.company_name || !settings.org_number || !settings.bankgiro) {
+      throw new UnprocessableEntity(
+        "Företagsnamn, organisationsnummer och bankgiro måste vara ifyllda innan ett fakturanummer kan tilldelas",
+      );
+    }
     const number = settings.next_invoice_number;
     await settingsRepo.bumpInvoiceNumber(tx);
     return { number, ocr: deriveOcr(number), settings };

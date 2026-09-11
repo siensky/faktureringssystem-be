@@ -7,10 +7,24 @@
 // Felhantering:
 //   - ogiltig envelope/payload  -> ack (permanent skräp, ska inte requeuas
 //                                   i all evighet). Loggas som error.
-//   - övrigt fel (t.ex. DB nere) -> kort paus + nack med requeue, så
-//                                   eventet får ett nytt försök när billing
-//                                   är friskt igen. En riktig dead-letter-
-//                                   kö med larm läggs till i fas 7.
+//   - övrigt fel (t.ex. DB nere) -> ETT nytt försök, räknat i ett
+//                                   x-attempts-headerfält på meddelandet —
+//                                   INTE amqplibs `redelivered`-flagga.
+//                                   Den sätts även vid en vanlig omstart
+//                                   eller rullande deploy, oavsett om något
+//                                   bearbetningsförsök alls gjorts, och
+//                                   skulle då ge upp redan på det första
+//                                   riktiga försöket (typiskt just när
+//                                   billing/MinIO/DB inte är varma än).
+//                                   Försöket görs om genom att ack:a
+//                                   originalet och publicera en kopia med
+//                                   x-attempts+1 till samma kö — headern
+//                                   överlever en omstart, till skillnad
+//                                   från redelivered. Efter MAX_ATTEMPTS
+//                                   ges meddelandet upp (ack + larm) så en
+//                                   förgiftad rad inte loopar hett. En
+//                                   riktig dead-letter-kö med larm läggs
+//                                   till i fas 7.
 
 import {
   EnvelopeValidationError,
@@ -27,6 +41,12 @@ const EXCHANGE = "events";
 const QUEUE = "billing.events";
 const ROUTING_KEYS = ["invoice.delivery_updated"];
 const REQUEUE_DELAY_MS = 1000;
+const ATTEMPTS_HEADER = "x-attempts";
+const MAX_ATTEMPTS = 3;
+// Måste vara IDENTISKA med infra/rabbitmq/init.sh:s förhandsdeklaration —
+// RabbitMQ ger PRECONDITION_FAILED om en redeklaration har andra
+// argument. Se init.sh för varför de sätts nu, innan de behövs.
+const QUEUE_ARGUMENTS = { "x-dead-letter-exchange": "events.dlx" };
 
 export interface DeliveryConsumer {
   stop(): Promise<void>;
@@ -41,18 +61,39 @@ export async function startDeliveryConsumer(opts: {
 }): Promise<DeliveryConsumer> {
   const { rabbit, service, logger } = opts;
   const channel: Channel = await rabbit.connection.createChannel();
+  // EGEN kanal för republishWithAttempt, skild från konsumtionskanalen.
+  // prefetch(1) begränsar billing till ett meddelande i taget här, men
+  // documents motsvarighet (prefetch 5) visade sig i praktiken kunna
+  // tappa hela konsumentregistreringen när flera samtidiga _on_message-
+  // anrop publicerade på samma kanal som aktivt konsumerade — samma
+  // försiktighetsåtgärd här, även vid prefetch(1), så de två sidorna inte
+  // kan glida isär i beteende senare.
+  const republishChannel: Channel = await rabbit.connection.createChannel();
 
   // 'events' deklareras EN gång av infra/rabbitmq/init.sh (durable topic).
   // billing-kontot har medvetet inte 'configure' på det (se init.sh), så vi
   // deklarerar det aldrig här — bara binder vår egen kö mot det.
-  await channel.assertQueue(QUEUE, { durable: true });
+  await channel.assertQueue(QUEUE, { durable: true, arguments: QUEUE_ARGUMENTS });
   for (const key of ROUTING_KEYS) {
     await channel.bindQueue(QUEUE, EXCHANGE, key);
   }
   await channel.prefetch(1);
 
+  const republishWithAttempt = async (msg: ConsumeMessage, attempts: number): Promise<void> => {
+    // Publicerar en KOPIA till vår egen kö (default-exchange, routing key
+    // = könamnet) med x-attempts satt, ack:ar originalet. Se moduldocen
+    // för varför detta ersätter redelivered-heuristiken.
+    republishChannel.publish("", QUEUE, msg.content, {
+      ...msg.properties,
+      headers: { ...msg.properties.headers, [ATTEMPTS_HEADER]: attempts },
+      persistent: true,
+    });
+    channel.ack(msg);
+  };
+
   const onMessage = async (msg: ConsumeMessage | null): Promise<void> => {
     if (!msg) return;
+    const attempts = Number(msg.properties.headers?.[ATTEMPTS_HEADER] ?? 0);
     try {
       const envelope = JSON.parse(msg.content.toString("utf8"));
       assertValidEnvelope(envelope);
@@ -87,19 +128,21 @@ export async function startDeliveryConsumer(opts: {
         channel.ack(msg);
         return;
       }
-      if (msg.fields.redelivered) {
-        // Andra försöket felade också — ge upp så en förgiftad rad inte
-        // loopar hett. Fas 7 inför en riktig dead-letter-kö med larm.
+      const nextAttempts = attempts + 1;
+      if (nextAttempts >= MAX_ATTEMPTS) {
         logger.error(
-          { err: error },
-          "delivery-consumer: transient fel även vid omleverans — ger upp (se fas 7 DLQ)",
+          { err: error, attempts: nextAttempts },
+          "delivery-consumer: transient fel, gav upp efter maxantal försök (se fas 7 DLQ)",
         );
         channel.ack(msg);
         return;
       }
-      logger.warn({ err: error }, "delivery-consumer: transient fel, requeue efter paus");
+      logger.warn(
+        { err: error, attempts: nextAttempts },
+        "delivery-consumer: transient fel, försöker igen",
+      );
       await sleep(REQUEUE_DELAY_MS);
-      channel.nack(msg, false, true);
+      await republishWithAttempt(msg, nextAttempts);
     }
   };
 
@@ -112,6 +155,7 @@ export async function startDeliveryConsumer(opts: {
       try {
         await channel.cancel(consumerTag);
         await channel.close();
+        await republishChannel.close();
       } catch (error) {
         logger.warn({ err: error }, "delivery-consumer: fel vid nedstängning");
       }

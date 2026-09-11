@@ -94,6 +94,13 @@ export function buildSnapshotPayload(input: {
       id: customer.id,
       name: customer.name,
       email: customer.email,
+      // Läst FÄRSKT vid send/credit, inte frusen — documents använder den
+      // för att avgöra om ett nytt utskick ens ska försökas (domain.md
+      // #23: en hård studs ska stoppa FRAMTIDA utskick, inte bara det som
+      // bounce:ade). customers är billings tabell; det här är den enda
+      // vägen documents kan känna till flaggan (architecture.md #2 — ingen
+      // JOIN över tjänstegränsen).
+      emailValid: customer.email_valid,
       customerType: customer.customer_type,
       orgNumber: customer.org_number,
       address: {

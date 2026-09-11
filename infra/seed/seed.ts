@@ -7,9 +7,12 @@
 // documents inte hämta snapshoten vid ett vanligt `docker compose up`, och
 // planens verifieringsrökprov går inte att köra.
 //
-// Vägrar köra med NODE_ENV=production (code-style.md #24) — ett script som
-// skapar kända konton med kända hemligheter är en bakdörr i produktion.
-// Där provisioneras klienter genom en riktig, granskad rutin.
+// Vägrar köra utanför development/test (code-style.md #24) — ALLOWLIST,
+// inte en denylist på "production": ett script som skapar kända konton
+// med kända hemligheter är en bakdörr om det råkar köras i produktion, och
+// en denylist missar det direkt om NODE_ENV är osatt, felstavat ("prod",
+// "Production") eller bara glömt i en container. I produktion provisioneras
+// klienter genom en riktig, granskad rutin.
 //
 // Idempotent: ON CONFLICT ... DO UPDATE, säkert att köra om vid varje
 // `docker compose up`.
@@ -38,9 +41,14 @@ interface ClientSpec {
   description: string;
 }
 
+const ALLOWED_ENVIRONMENTS = new Set(["development", "test"]);
+
 async function main(): Promise<void> {
-  if (process.env.NODE_ENV === "production") {
-    console.error("seed: vägrar köra med NODE_ENV=production");
+  const env = process.env.NODE_ENV;
+  if (!env || !ALLOWED_ENVIRONMENTS.has(env)) {
+    console.error(
+      `seed: vägrar köra — NODE_ENV måste vara "development" eller "test" (var: ${env ?? "<osatt>"})`,
+    );
     process.exit(1);
   }
 
@@ -50,10 +58,9 @@ async function main(): Promise<void> {
     {
       clientId: required("DOCUMENTS_CLIENT_ID"),
       clientSecret: required("DOCUMENTS_CLIENT_SECRET"),
-      scopes: (
-        process.env.DOCUMENTS_CLIENT_SCOPES ??
-        "billing:invoice:read billing:company:read billing:customer:read"
-      )
+      // Minsta möjliga scope (architecture.md #18): documents anropar bara
+      // GET /internal/invoices/:id/snapshot.
+      scopes: (process.env.DOCUMENTS_CLIENT_SCOPES ?? "billing:invoice:read")
         .split(/\s+/)
         .filter(Boolean),
       description: "documents-tjänsten: läser snapshot/kund/företag för PDF-rendering (fas 4)",

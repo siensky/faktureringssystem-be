@@ -293,6 +293,19 @@ describe.skipIf(!RUN)("fas 4 e2e — documents", () => {
     expect(late.status).toBe(200);
     await new Promise((r) => setTimeout(r, 2000));
     expect((await invoice(s, id)).deliveryStatus).toBe("bounced");
+
+    // domain.md #23: hård studs stoppar FRAMTIDA utskick, inte bara det
+    // bounce:ade mejlet. En andra faktura till samma (nu ogiltiga) adress
+    // ska få en PDF (portalen/admin kan fortfarande nå den) men INGET
+    // köat mejl — annars svartlistas avsändardomänen.
+    const id2 = await createAndSend(s, customerId);
+    await waitForDelivery(s, id2, "failed");
+    const [docCount] =
+      await sql`SELECT count(*)::int AS n FROM documents WHERE invoice_id = ${id2}`;
+    expect(docCount.n).toBe(1);
+    const [mailCount] =
+      await sql`SELECT count(*)::int AS n FROM email_outbox WHERE invoice_id = ${id2}`;
+    expect(mailCount.n).toBe(0);
   });
 
   test("kreditfaktura får egen PDF och eget mejl", async () => {

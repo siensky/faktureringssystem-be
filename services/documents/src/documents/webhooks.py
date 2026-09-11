@@ -27,7 +27,7 @@ from fastapi import APIRouter, HTTPException, Request
 
 from . import repository
 from .config import Settings
-from .delivery import DELIVERY_RANK, delivery_rank, map_webhook_status
+from .delivery import delivery_rank, delivery_status_order, map_webhook_status
 
 PROVIDER = "email"
 TIMESTAMP_TOLERANCE_SECONDS = 300
@@ -36,7 +36,12 @@ TIMESTAMP_TOLERANCE_SECONDS = 300
 def verify_signature(*, secret: str, timestamp: str, raw_body: bytes, signature: str) -> bool:
     base = timestamp.encode("utf-8") + b"." + raw_body
     expected = hmac.new(secret.encode("utf-8"), base, hashlib.sha256).hexdigest()
-    return hmac.compare_digest(expected, signature or "")
+    # hmac.compare_digest kastar TypeError på en str med icke-ASCII-tecken
+    # (Starlette avkodar headers som latin-1, så X-Signature KAN innehålla
+    # sådana från en illa ihopsatt eller ondsint förfrågan) — det skulle bli
+    # ett 500 i stället för ett 401 på en publik endpoint. Jämför bytes i
+    # stället, där alla värden är giltiga (PR-granskning fas 4, punkt 22).
+    return hmac.compare_digest(expected.encode("ascii"), (signature or "").encode("utf-8"))
 
 
 def timestamp_fresh(
@@ -53,10 +58,12 @@ def _lower_ranked_statuses(target: str) -> list[str]:
     """De email_outbox-statusar som får övergå TILL target (strikt lägre
     rank). 'none' hör bara till billings kolumn, inte email_outbox."""
     target_rank = delivery_rank(target)
-    return [s for s, r in DELIVERY_RANK.items() if s != "none" and 0 < r < target_rank]
+    return [
+        s for s in delivery_status_order() if s != "none" and 0 < delivery_rank(s) < target_rank
+    ]
 
 
-def create_webhook_router(settings: Settings, pool_getter) -> APIRouter:
+def create_webhook_router(settings: Settings, pool_getter, logger: Any) -> APIRouter:
     router = APIRouter()
 
     @router.post("/webhooks/email-status")
@@ -102,7 +109,12 @@ def create_webhook_router(settings: Settings, pool_getter) -> APIRouter:
         email_row = await _find_email(pool, message_id)
         if email_row is None:
             # Okänt meddelande — kvittera 200 så leverantören slutar
-            # försöka, men logga: det kan vara en bugg eller ett angrepp.
+            # försöka, men logga: det kan vara en bugg eller ett angrepp
+            # (en giltigt SIGNERAD webhook för ett messageId vi aldrig satt
+            # är i sig konstigt nog för att synas i loggen).
+            logger.warning(
+                "webhook: okänt messageId, ignorerar", message_id=message_id, event_id=event_id
+            )
             return {"status": "ignored_unknown_message"}
 
         async with pool.acquire() as conn, conn.transaction():

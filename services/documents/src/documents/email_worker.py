@@ -7,12 +7,18 @@ PDF:en bifogas som fil — ingen bärartoken (signerad URL) läggs i ett mejl
 som lever för evigt (domain.md #19). Portalen (fas 9) använder i stället
 GET /internal/documents/:invoiceId/url.
 
-"Leasing": claim-steget skjuter fram next_attempt_at och räknar upp
-attempts i en egen transaktion, så en samtidig arbetare (FOR UPDATE SKIP
-LOCKED) hoppar över raden. Raden står kvar 'queued' medan SMTP körs
-(utanför transaktionen — extern sidoeffekt). Kraschar processen mellan
-SMTP-svaret och statusskrivningen skickas mejlet om vid nästa försök; det
-är medvetet at-least-once (samma avvägning som resten av systemet).
+"Leasing": claim-steget skjuter fram next_attempt_at EXPONENTIELLT och
+räknar upp attempts i en egen transaktion, så en samtidig arbetare (FOR
+UPDATE SKIP LOCKED) hoppar över raden. Raden står kvar 'queued' medan SMTP
+körs (utanför transaktionen — extern sidoeffekt).
+
+Kraschar PROCESSEN mellan SMTP-svaret och statusskrivningen skickas
+mejlet om vid nästa försök; det är medvetet at-least-once (samma avvägning
+som resten av systemet). Ett enstaka DB-fel EFTER lyckad SMTP (utan att
+processen kraschar) är en annan sak — det skulle annars mejla kunden igen
+redan vid nästa lease-cykel utan att någon krasch alls skett. _on_send_
+success görs därför om ett par gånger innan den ger upp, och _process_one
+fångar den om den ändå felar — se kommentarerna där.
 """
 
 from __future__ import annotations
@@ -27,17 +33,15 @@ import asyncpg
 
 from . import repository
 from .config import Settings
-from .s3 import get_pdf
+from .s3 import S3Store
 
 POLL_INTERVAL_SECONDS = 2.0
 BATCH_SIZE = 10
 MAX_ATTEMPTS = 6
 BACKOFF_BASE_SECONDS = 30
 BACKOFF_CAP_SECONDS = 3600
-
-
-def backoff_seconds(attempts: int) -> int:
-    return min(BACKOFF_BASE_SECONDS * (2 ** max(attempts - 1, 0)), BACKOFF_CAP_SECONDS)
+_SEND_SUCCESS_MAX_ATTEMPTS = 3
+_SEND_SUCCESS_RETRY_DELAY_SECONDS = 0.5
 
 
 def _build_message(
@@ -57,9 +61,10 @@ def _build_message(
 
 
 class EmailWorker:
-    def __init__(self, *, pool: asyncpg.Pool, settings: Settings, logger: Any) -> None:
+    def __init__(self, *, pool: asyncpg.Pool, settings: Settings, s3: S3Store, logger: Any) -> None:
         self._pool = pool
         self._settings = settings
+        self._s3 = s3
         self._logger = logger
         self._task: asyncio.Task | None = None
         self._stopped = asyncio.Event()
@@ -90,12 +95,15 @@ class EmailWorker:
     async def _tick(self) -> None:
         async with self._pool.acquire() as conn, conn.transaction():
             leased = await repository.lease_queued_emails(
-                conn, limit=BATCH_SIZE, backoff_seconds=backoff_seconds(1)
+                conn,
+                limit=BATCH_SIZE,
+                base_backoff_seconds=BACKOFF_BASE_SECONDS,
+                cap_backoff_seconds=BACKOFF_CAP_SECONDS,
             )
         for row in leased:
             await self._process_one(row)
 
-    async def _process_one(self, row: asyncpg.Record) -> None:
+    async def _process_one(self, row: dict[str, Any]) -> None:
         # RFC-formen (med vinkelparenteser) i Message-ID-headern; den
         # NORMALISERADE formen (utan) i provider_message_id, eftersom
         # leverantörernas webhooks rapporterar id:t utan parenteser.
@@ -103,7 +111,7 @@ class EmailWorker:
         stored_message_id = message_id.strip("<>")
         try:
             storage_key = await self._storage_key_for(row["document_id"])
-            pdf = await get_pdf(self._settings, storage_key)
+            pdf = await self._s3.get_pdf(storage_key)
             message = _build_message(
                 sender=self._settings.email_from,
                 recipient=row["recipient_email"],
@@ -116,13 +124,30 @@ class EmailWorker:
                 message,
                 hostname=self._settings.smtp_host,
                 port=self._settings.smtp_port,
-                start_tls=False,
+                start_tls=self._settings.smtp_start_tls,
+                username=self._settings.smtp_username,
+                password=self._settings.smtp_password,
             )
         except Exception as error:  # noqa: BLE001
             await self._on_send_failure(row, str(error))
             return
 
-        await self._on_send_success(row, stored_message_id)
+        try:
+            await self._on_send_success(row, stored_message_id)
+        except Exception as error:  # noqa: BLE001
+            # SMTP LYCKADES men bokföringen av det gjorde det inte, trots
+            # _on_send_success:s egna interna omförsök. Om vi lät felet
+            # bubbla upp härifrån skulle _tick/_run bara logga och gå
+            # vidare med raden fortfarande 'queued' — och nästa lease-cykel
+            # skulle skicka SAMMA mejl igen utan att processen ens kraschat.
+            # Ett högljutt larm är bättre än ett tyst dubbelutskick.
+            self._logger.critical(
+                "email-worker: mejlet SKICKADES men kunde inte bokföras — "
+                "risk för dubbelutskick vid nästa lease-cykel",
+                email_id=row["id"],
+                invoice_id=row["invoice_id"],
+                error=str(error),
+            )
 
     async def _storage_key_for(self, document_id: int) -> str:
         async with self._pool.acquire() as conn:
@@ -133,28 +158,43 @@ class EmailWorker:
             raise RuntimeError(f"documents-rad {document_id} saknas")
         return doc["storage_key"]
 
-    async def _on_send_success(self, row: asyncpg.Record, message_id: str) -> None:
-        async with self._pool.acquire() as conn, conn.transaction():
-            changed = await repository.mark_email_sent(
-                conn, email_id=row["id"], provider_message_id=message_id
-            )
-            if changed == 1:
-                await repository.write_event(
-                    conn,
-                    event_type="invoice.delivery_updated",
-                    tenant_id=row["tenant_id"],
-                    correlation_id=str(row["correlation_id"]),
-                    payload={
-                        "invoiceId": row["invoice_id"],
-                        "documentType": row["email_type"],
-                        "deliveryStatus": "sent",
-                    },
+    async def _on_send_success(self, row: dict[str, Any], message_id: str) -> None:
+        # Ett par snabba interna omförsök på själva BOKFÖRINGEN (inte ett
+        # nytt SMTP-utskick) — de allra flesta "DB-blippar" är
+        # sub-sekundsstörningar. Räcker inte det bubblar felet upp till
+        # _process_one, som loggar högljutt i stället för att tyst mejla
+        # kunden igen vid nästa lease-cykel.
+        last_error: Exception | None = None
+        for attempt in range(_SEND_SUCCESS_MAX_ATTEMPTS):
+            try:
+                async with self._pool.acquire() as conn, conn.transaction():
+                    changed = await repository.mark_email_sent(
+                        conn, email_id=row["id"], provider_message_id=message_id
+                    )
+                    if changed == 1:
+                        await repository.write_event(
+                            conn,
+                            event_type="invoice.delivery_updated",
+                            tenant_id=row["tenant_id"],
+                            correlation_id=str(row["correlation_id"]),
+                            payload={
+                                "invoiceId": row["invoice_id"],
+                                "documentType": row["email_type"],
+                                "deliveryStatus": "sent",
+                            },
+                        )
+                self._logger.info(
+                    "email-worker: mejl skickat", email_id=row["id"], invoice_id=row["invoice_id"]
                 )
-        self._logger.info(
-            "email-worker: mejl skickat", email_id=row["id"], invoice_id=row["invoice_id"]
-        )
+                return
+            except Exception as error:  # noqa: BLE001
+                last_error = error
+                if attempt < _SEND_SUCCESS_MAX_ATTEMPTS - 1:
+                    await asyncio.sleep(_SEND_SUCCESS_RETRY_DELAY_SECONDS)
+        assert last_error is not None
+        raise last_error
 
-    async def _on_send_failure(self, row: asyncpg.Record, error: str) -> None:
+    async def _on_send_failure(self, row: dict[str, Any], error: str) -> None:
         attempts = row["attempts"]
         async with self._pool.acquire() as conn, conn.transaction():
             if attempts >= MAX_ATTEMPTS:

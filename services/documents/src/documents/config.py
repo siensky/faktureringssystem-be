@@ -42,9 +42,17 @@ class Settings:
     s3_secret_access_key: str
     pdf_url_ttl_seconds: int
 
-    # SMTP (Mailpit lokalt/CI).
+    # SMTP. Mailpit lokalt/CI kör utan TLS/autentisering (default nedan) —
+    # en riktig leverantör i produktion sätter SMTP_START_TLS=true och
+    # SMTP_USERNAME/SMTP_PASSWORD. Fakturor bär personuppgifter, adresser
+    # och belopp; klartext-SMTP mot en publik leverantör vore fel default,
+    # men en hård kod-ändring för att slå på TLS/auth (i stället för en
+    # konfigurationsyta) är fel för Mailpit.
     smtp_host: str
     smtp_port: int
+    smtp_start_tls: bool
+    smtp_username: str | None
+    smtp_password: str | None
     email_from: str
 
     # HMAC-hemlighet för POST /webhooks/email-status. Signaturen räknas över
@@ -77,7 +85,11 @@ _REQUIRED = [
     "DOCUMENTS_CLIENT_SECRET",
 ]
 
-_DEFAULT_SCOPES = "billing:invoice:read billing:company:read billing:customer:read"
+# Minsta möjliga scope (architecture.md #18): BillingClient anropar bara
+# GET /internal/invoices/:id/snapshot — snapshoten bär redan företags- och
+# kunduppgifter frusna vid send/credit, så billing:company:read och
+# billing:customer:read behövs aldrig (PR-granskning fas 4, punkt 12).
+_DEFAULT_SCOPES = "billing:invoice:read"
 
 
 def load_settings(env: dict[str, str] | None = None) -> Settings:
@@ -108,6 +120,9 @@ def load_settings(env: dict[str, str] | None = None) -> Settings:
         pdf_url_ttl_seconds=int(source.get("PDF_URL_TTL_SECONDS", "900")),
         smtp_host=source["SMTP_HOST"],
         smtp_port=int(source.get("SMTP_PORT", "1025")),
+        smtp_start_tls=source.get("SMTP_START_TLS", "false").strip().lower() == "true",
+        smtp_username=source.get("SMTP_USERNAME") or None,
+        smtp_password=source.get("SMTP_PASSWORD") or None,
         email_from=source["EMAIL_FROM"],
         email_webhook_secret=source["EMAIL_WEBHOOK_SECRET"],
         billing_base_url=source["BILLING_BASE_URL"].rstrip("/"),

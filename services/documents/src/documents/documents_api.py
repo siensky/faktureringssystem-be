@@ -20,13 +20,15 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from . import repository
 from .config import Settings
-from .s3 import presigned_get_url
+from .s3 import S3Store
 from .service_auth import ServiceContext, require_tenant
 
 PDF_SCOPE = "documents:pdf:read"
 
 
-def create_documents_router(settings: Settings, pool_getter, require_service) -> APIRouter:
+def create_documents_router(
+    pool_getter, s3_getter, settings: Settings, require_service
+) -> APIRouter:
     router = APIRouter()
     pdf_guard = require_service(PDF_SCOPE)
 
@@ -43,8 +45,9 @@ def create_documents_router(settings: Settings, pool_getter, require_service) ->
         if doc is None:
             raise HTTPException(status_code=404, detail="Inget dokument för fakturan")
 
+        s3: S3Store = s3_getter()
         ttl = settings.pdf_url_ttl_seconds
-        url = presigned_get_url(settings, doc["storage_key"], ttl)
+        url = await s3.presigned_get_url(doc["storage_key"], ttl)
         return {
             "invoiceId": invoice_id,
             "documentType": doc["document_type"],

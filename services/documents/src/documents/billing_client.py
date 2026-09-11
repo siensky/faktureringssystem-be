@@ -35,7 +35,9 @@ class BillingClient:
         cached = await self._redis.get(self._cache_key)
         if cached:
             return cached.decode("utf-8") if isinstance(cached, bytes) else cached
+        return await self._refresh_token()
 
+    async def _refresh_token(self) -> str:
         async with httpx.AsyncClient(timeout=10.0) as client:
             res = await client.post(
                 f"{self._settings.auth_base_url}/auth/token",
@@ -54,12 +56,49 @@ class BillingClient:
         await self._redis.set(self._cache_key, token, ex=ttl)
         return token
 
+    async def _invalidate_token(self) -> None:
+        await self._redis.delete(self._cache_key)
+
     async def fetch_snapshot(
         self, *, invoice_id: int, tenant_id: int, correlation_id: str
     ) -> dict[str, Any]:
         token = await self._service_token()
+        res = await self._get_snapshot(token, invoice_id, tenant_id, correlation_id)
+
+        if res.status_code == 401:
+            # architecture.md #19: 401 = "vem är du?" — ogiltigt eller
+            # UTGÅNGET token. Precis det transienta felet som läker av sig
+            # självt: cachen kan ha hunnit bli inaktuell mot billings
+            # klocka, eller JWT_SERVICE_SECRET roterats. Kasta bort det
+            # cachade tokenet och försök EN gång till med ett färskt —
+            # lyckas inte det heller bubblar felet upp som transient
+            # (konsumenten nack:ar/requeue:ar, i stället för att ack:a
+            # bort en faktura som aldrig får sin PDF).
+            await self._invalidate_token()
+            token = await self._refresh_token()
+            res = await self._get_snapshot(token, invoice_id, tenant_id, correlation_id)
+            if res.status_code == 401:
+                raise RuntimeError(
+                    f"snapshot {invoice_id}: billing svarade 401 även efter nytt token"
+                )
+
+        if res.status_code == 404:
+            raise SnapshotNotFound(invoice_id)
+        if res.status_code == 403:
+            # architecture.md #19: 403 = giltig token men FEL SCOPE (eller
+            # en avstängd/borttagen tenant, se requireService i billing).
+            # Ingen av dem löser sig av att vänta — permanent för
+            # konsumenten (ack + larm), till skillnad från 401 ovan.
+            raise SnapshotAccessDenied(invoice_id, res.status_code)
+        if res.status_code != 200:
+            raise RuntimeError(f"snapshot {invoice_id}: billing svarade {res.status_code}")
+        return res.json()
+
+    async def _get_snapshot(
+        self, token: str, invoice_id: int, tenant_id: int, correlation_id: str
+    ) -> httpx.Response:
         async with httpx.AsyncClient(timeout=15.0) as client:
-            res = await client.get(
+            return await client.get(
                 f"{self._settings.billing_base_url}/internal/invoices/{invoice_id}/snapshot",
                 headers={
                     "authorization": f"Bearer {token}",
@@ -67,16 +106,6 @@ class BillingClient:
                     "x-correlation-id": correlation_id,
                 },
             )
-        if res.status_code == 404:
-            raise SnapshotNotFound(invoice_id)
-        if res.status_code in (401, 403):
-            # Fel scope, eller en avstängd/borttagen tenant. Ingen av dem
-            # löser sig av att vänta — behandlas som permanent av
-            # konsumenten (ack + larm), inte som ett transient fel.
-            raise SnapshotAccessDenied(invoice_id, res.status_code)
-        if res.status_code != 200:
-            raise RuntimeError(f"snapshot {invoice_id}: billing svarade {res.status_code}")
-        return res.json()
 
 
 class SnapshotNotFound(RuntimeError):

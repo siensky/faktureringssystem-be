@@ -5,32 +5,23 @@
 // invoices.delivery_status ägs av documents rapporter men bor i billings
 // tabell, så billing är enda tjänsten som skriver den (architecture.md #1).
 // Uppdateringen är MONOTON: ett försenat 'delivered' får aldrig skriva
-// över ett 'bounced' (domain.md #29). Monotoniciteten uttrycks som ett
-// rank-villkor i WHERE-satsen, så en förlorad kapplöpning helt enkelt
-// träffar noll rader i stället för att kliva bakåt.
+// över ett 'bounced' (domain.md #29), och inte heller nedgradera ett redan
+// bekräftat 'delivered' till 'failed' (t.ex. ett ur ordning levererat
+// webhook-event). Rangordningen är DELAD med documents (Python) via
+// packages/contracts — se schemas/delivery-status-rank.json — i stället
+// för en hårdkodad kopia i varje språk som kan glida isär tyst.
+//
+// array_position() på den delade ordningen ger rangen direkt i SQL:
+// NULL < NULL = NULL (inte TRUE) om ett värde av någon anledning inte
+// finns i listan, så jämförelsen failar STÄNGT (ingen skrivning) snarare
+// än att krascha eller råka tillåta en okänd status.
 
+import { DELIVERY_STATUS_ORDER, deliveryRank } from "@faktura/contracts";
 import { TenantScopedRepository } from "@faktura/shared";
 import type { TransactionSql } from "postgres";
 import type { DeliveryStatus } from "../invoices/types";
 
-/**
- * Rank för monoton jämförelse. Terminala utfall (failed/bounced) ligger
- * högst så att inget "framsteg" kan skriva över dem; 'bounced' över
- * 'failed' eftersom en studs är ett starkare besked om adressen än ett
- * generiskt sändfel.
- */
-const DELIVERY_RANK: Record<DeliveryStatus, number> = {
-  none: 0,
-  queued: 1,
-  sent: 2,
-  delivered: 3,
-  failed: 4,
-  bounced: 5,
-};
-
-export function deliveryRank(status: DeliveryStatus): number {
-  return DELIVERY_RANK[status];
-}
+export { deliveryRank };
 
 export class DeliveryRepository extends TenantScopedRepository {
   constructor(
@@ -62,13 +53,12 @@ export class DeliveryRepository extends TenantScopedRepository {
    * ett framsteg).
    */
   async advanceDeliveryStatus(invoiceId: number, next: DeliveryStatus): Promise<number> {
+    const order = [...DELIVERY_STATUS_ORDER];
     const rows = await this.tx`
       UPDATE invoices SET delivery_status = ${next}, updated_at = now()
       WHERE id = ${invoiceId} AND tenant_id = ${this.tenantId}
-        AND CASE delivery_status
-              WHEN 'none' THEN 0 WHEN 'queued' THEN 1 WHEN 'sent' THEN 2
-              WHEN 'delivered' THEN 3 WHEN 'failed' THEN 4 WHEN 'bounced' THEN 5
-            END < ${deliveryRank(next)}
+        AND array_position(${order}::text[], delivery_status)
+            < array_position(${order}::text[], ${next})
     `;
     return rows.count;
   }

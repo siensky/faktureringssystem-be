@@ -81,11 +81,20 @@ async def insert_document(
 async def find_document(
     conn: asyncpg.Connection, *, tenant_id: int, invoice_id: int
 ) -> asyncpg.Record | None:
+    """Utan document_type: en invoice_id har i praktiken EXAKT en
+    document_type (en vanlig faktura har invoice_type='invoice' i billing,
+    en kreditfaktura är en EGEN invoice_id med invoice_type='credit_note'
+    — de delar aldrig id), så (tenant_id, invoice_id) räcker för att
+    identifiera raden entydigt. ORDER BY id DESC är ett rent skyddsnät om
+    antagandet någonsin skulle brytas — internal/documents/:invoiceId/url
+    (den enda anroparen) ska då hellre hitta EN rad deterministiskt än få
+    ett odefinierat val."""
     return await conn.fetchrow(
         """
         SELECT id, document_type, storage_key, byte_size, sha256
         FROM documents
         WHERE tenant_id = $1 AND invoice_id = $2
+        ORDER BY id DESC
         LIMIT 1
         """,
         tenant_id,
@@ -125,32 +134,54 @@ async def enqueue_email(
 
 
 async def lease_queued_emails(
-    conn: asyncpg.Connection, *, limit: int, backoff_seconds: int
-) -> list[asyncpg.Record]:
-    """ "Leasar" köade, mogna rader genom att skjuta fram next_attempt_at och
-    räkna upp attempts — en samtidig arbetare (FOR UPDATE SKIP LOCKED)
-    hoppar då över dem. Raden står kvar som 'queued'; själva övergången
-    till 'sent'/'failed' är en separat villkorad UPDATE efter att SMTP
-    svarat. Kör i egen transaktion."""
-    return await conn.fetch(
+    conn: asyncpg.Connection,
+    *,
+    limit: int,
+    base_backoff_seconds: int,
+    cap_backoff_seconds: int,
+) -> list[dict[str, Any]]:
+    """ "Leasar" köade, mogna rader genom att skjuta fram next_attempt_at
+    (EXPONENTIELLT — dubblat per tidigare försök, upp till cap_backoff_
+    seconds) och räkna upp attempts — en samtidig arbetare (FOR UPDATE SKIP
+    LOCKED) hoppar då över dem. Raden står kvar som 'queued'; själva
+    övergången till 'sent'/'failed' är en separat villkorad UPDATE efter
+    att SMTP svarat. Kör i egen transaktion.
+
+    Backoffen beräknas PER RAD (varje rad kan ha olika attempts-räknare),
+    så det blir N enskilda UPDATE i stället för en enda mängd-UPDATE — en
+    konstant multiplicerad in i en enda sats hade gett samma väntetid åt
+    alla rader oavsett hur många gånger de redan felat, vilket gör hela
+    poängen med exponentiell backoff om intet (en nere SMTP-server hade
+    fått samma belastning i alla sex försöken)."""
+    rows = await conn.fetch(
         """
-        UPDATE email_outbox
-        SET attempts = attempts + 1,
-            next_attempt_at = now() + ($2 || ' seconds')::interval,
-            updated_at = now()
-        WHERE id IN (
-          SELECT id FROM email_outbox
-          WHERE status = 'queued' AND next_attempt_at <= now()
-          ORDER BY next_attempt_at
-          FOR UPDATE SKIP LOCKED
-          LIMIT $1
-        )
-        RETURNING id, tenant_id, invoice_id, email_type, document_id,
-                  recipient_email, subject, correlation_id, attempts
+        SELECT id, tenant_id, invoice_id, email_type, document_id,
+               recipient_email, subject, correlation_id, attempts
+        FROM email_outbox
+        WHERE status = 'queued' AND next_attempt_at <= now()
+        ORDER BY next_attempt_at
+        FOR UPDATE SKIP LOCKED
+        LIMIT $1
         """,
         limit,
-        str(backoff_seconds),
     )
+    leased: list[dict[str, Any]] = []
+    for row in rows:
+        next_attempts = row["attempts"] + 1
+        backoff = min(base_backoff_seconds * (2 ** row["attempts"]), cap_backoff_seconds)
+        await conn.execute(
+            """
+            UPDATE email_outbox
+            SET attempts = $2, next_attempt_at = now() + ($3 || ' seconds')::interval,
+                updated_at = now()
+            WHERE id = $1
+            """,
+            row["id"],
+            next_attempts,
+            str(backoff),
+        )
+        leased.append({**dict(row), "attempts": next_attempts})
+    return leased
 
 
 async def mark_email_sent(

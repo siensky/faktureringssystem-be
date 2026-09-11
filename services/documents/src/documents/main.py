@@ -35,7 +35,7 @@ from .logging import configure_logging, get_logger
 from .middleware import BodySizeLimitMiddleware, SecurityHeadersMiddleware
 from .outbox import OutboxPublisher
 from .rabbitmq import RabbitConnection, connect_rabbitmq, events_exchange, start_system_ping
-from .s3 import ensure_bucket
+from .s3 import S3Store
 from .service_auth import create_require_service
 from .webhooks import create_webhook_router
 
@@ -56,6 +56,10 @@ def _pool():
     return _state["db"]
 
 
+def _s3_store() -> S3Store:
+    return _state["s3"]
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     pool = await connect_db(settings.database_url)
@@ -68,7 +72,11 @@ async def lifespan(_app: FastAPI):
         on_ping=lambda msg: logger.info("mottog system.ping", **{"from": msg["service"]}),
     )
 
-    await ensure_bucket(settings)
+    # Bucketen skapas av infra/minio/init.sh (körs FÖRE documents, se
+    # docker-compose.yml) med MinIO-root. documents kör med en EGEN,
+    # bucket-begränsad nyckel och saknar (avsiktligt) rättighet att skapa
+    # bucketar — se s3.py:s moduldoc, PR-granskning fas 4, punkt 13.
+    s3_store = S3Store(settings)
 
     publisher_channel = await rabbit.connection.channel()
     exchange = await events_exchange(publisher_channel)
@@ -93,11 +101,12 @@ async def lifespan(_app: FastAPI):
         pool=pool,
         settings=settings,
         billing=billing,
+        s3=s3_store,
         logger=logger,
     )
     await consumer.start()
 
-    email_worker = EmailWorker(pool=pool, settings=settings, logger=logger)
+    email_worker = EmailWorker(pool=pool, settings=settings, s3=s3_store, logger=logger)
     email_worker.start()
 
     _state.update(
@@ -109,6 +118,7 @@ async def lifespan(_app: FastAPI):
         outbox_publisher=outbox_publisher,
         consumer=consumer,
         email_worker=email_worker,
+        s3=s3_store,
     )
 
     logger.info("documents lyssnar", port=settings.port)
@@ -136,8 +146,8 @@ app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(BodySizeLimitMiddleware, max_bytes=MAX_BODY_BYTES)
 
 _require_service = create_require_service(settings.jwt_service_secret)
-app.include_router(create_webhook_router(settings, _pool))
-app.include_router(create_documents_router(settings, _pool, _require_service))
+app.include_router(create_webhook_router(settings, _pool, logger))
+app.include_router(create_documents_router(_pool, _s3_store, settings, _require_service))
 
 
 @app.exception_handler(Exception)

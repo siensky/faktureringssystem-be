@@ -117,8 +117,15 @@ export const up = (pgm) => {
     -- Partiellt så skanningen inte växer med hela historiken.
     CREATE INDEX email_outbox_pending_idx ON email_outbox (next_attempt_at)
       WHERE status = 'queued';
-    -- Webhookens uppslag. Partiellt — bara skickade rader har ett id.
-    CREATE INDEX email_outbox_provider_message_id_idx ON email_outbox (provider_message_id)
+    -- Webhookens uppslag. UNIK (inte bara indexerad): det här id:t är
+    -- GLOBALT över tenants (webhooken har ingen betrodd tenant, precis
+    -- som email_webhook_events nedan) och är den ENDA nyckeln som avgör
+    -- vilken tenants faktura en statusrapport gäller. Utan UNIQUE skulle
+    -- två rader med samma id göra uppslaget odefinierat — fel tenants
+    -- kund kan flaggas email_valid=false eller fel tenants faktura
+    -- bounce:as (PR-granskning fas 4, punkt 10). Partiell: bara skickade
+    -- rader har ett id.
+    CREATE UNIQUE INDEX email_outbox_provider_message_id_key ON email_outbox (provider_message_id)
       WHERE provider_message_id IS NOT NULL;
 
     -- Dedup av inkommande leverantörs-event (planens Säkerhet: Webhooks #2).

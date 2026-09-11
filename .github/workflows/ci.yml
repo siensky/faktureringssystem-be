@@ -143,11 +143,13 @@ jobs:
           S3_REGION=us-east-1
           S3_PUBLIC_ENDPOINT=http://localhost:9000
           PDF_URL_TTL_SECONDS=900
+          DOCUMENTS_S3_ACCESS_KEY_ID=ci_documents_s3_key
+          DOCUMENTS_S3_SECRET_ACCESS_KEY=ci_documents_s3_secret_not_a_real_secret
           EMAIL_FROM=fakturor@faktura.test
           EMAIL_WEBHOOK_SECRET=ci_email_webhook_secret_not_a_real_secret_0000
           DOCUMENTS_CLIENT_ID=svc-documents
           DOCUMENTS_CLIENT_SECRET=ci_documents_client_secret_not_a_real_secret_00
-          DOCUMENTS_CLIENT_SCOPES=billing:invoice:read billing:company:read billing:customer:read
+          DOCUMENTS_CLIENT_SCOPES=billing:invoice:read
           ENVEOF
 
       - name: Bygg alla images
