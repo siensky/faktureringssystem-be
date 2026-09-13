@@ -58,6 +58,15 @@ services:
       DOCUMENTS_CLIENT_ID: ${DOCUMENTS_CLIENT_ID}
       DOCUMENTS_CLIENT_SECRET: ${DOCUMENTS_CLIENT_SECRET}
       DOCUMENTS_CLIENT_SCOPES: ${DOCUMENTS_CLIENT_SCOPES}
+      PAYMENTS_CLIENT_ID: ${PAYMENTS_CLIENT_ID}
+      PAYMENTS_CLIENT_SECRET: ${PAYMENTS_CLIENT_SECRET}
+      PAYMENTS_CLIENT_SCOPES: ${PAYMENTS_CLIENT_SCOPES}
+      # Drift-konto, inte en tjänst — se infra/seed/seed.ts. Ingen körande
+      # tjänst behöver de här uppgifterna, bara seed-steget som skapar
+      # kontot en operatör senare loggar in med.
+      PAYMENTS_OPS_CLIENT_ID: ${PAYMENTS_OPS_CLIENT_ID}
+      PAYMENTS_OPS_CLIENT_SECRET: ${PAYMENTS_OPS_CLIENT_SECRET}
+      PAYMENTS_OPS_CLIENT_SCOPES: ${PAYMENTS_OPS_CLIENT_SCOPES}
     depends_on:
       db:
         condition: service_healthy
@@ -82,6 +91,13 @@ services:
     environment:
       RABBITMQ_DEFAULT_USER: ${RABBITMQ_DEFAULT_USER}
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_DEFAULT_PASS}
+      # Utan ett explicit värde genererar entrypoint-skriptet ett eget
+      # .erlang.cookie vid uppstart — det steget har visat sig kunna krascha
+      # containern med "Error when reading /var/lib/rabbitmq/.erlang.cookie:
+      # eacces" på vissa Docker-installationer (observerat lokalt under
+      # fas 5-arbetet, orört av själva payments-koden). Ett fast värde här
+      # gör att entrypoint aldrig behöver skriva filen alls.
+      RABBITMQ_ERLANG_COOKIE: ${RABBITMQ_ERLANG_COOKIE}
     ports:
       - "${RABBITMQ_PORT}:5672"
       - "${RABBITMQ_MANAGEMENT_PORT}:15672"
@@ -118,7 +134,12 @@ services:
     entrypoint: ["sh", "/init.sh"]
 
   minio:
-    image: minio/minio:latest
+    # quay.io, inte Docker Hub: minio/minio och minio/mc gick inte längre
+    # att dra anonymt från Docker Hub (pull access denied) — MinIO har
+    # flyttat sin publika distribution dit. Förbefintligt, orört av
+    # fas 5:s betalningslogik, men blockerade docker-build-and-smoke-test
+    # i CI för PR #5 tills det upptäcktes och fixades här.
+    image: quay.io/minio/minio:latest
     container_name: invoice_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -142,7 +163,7 @@ services:
   # documents får ALDRIG MinIO-root — samma resonemang som planens fas 7
   # för separata Postgres-roller (PR-granskning fas 4, punkt 13).
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: invoice_minio_init
     depends_on:
       minio:
@@ -200,6 +221,10 @@ services:
       BANKID_PROVIDER: ${BANKID_PROVIDER:-mock}
       JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
+      # Grov global missbruksspärr (packages/shared/src/service/index.ts),
+      # inte den finkorniga strypningen ovan. Höjs i .env/CI — se den
+      # filens kommentar om varför (PR-granskning fas 5).
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
@@ -238,6 +263,7 @@ services:
       # nycklar. PNR_HMAC_KEY delas med auth så BankID kan slå upp kunden.
       PNR_ENCRYPTION_KEY: ${PNR_ENCRYPTION_KEY}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
@@ -267,10 +293,28 @@ services:
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
       LOG_LEVEL: ${LOG_LEVEL}
+      NODE_ENV: ${NODE_ENV:-development}
+      # Verifierar användar-JWT (/admin/payments/*) och tjänste-JWT
+      # (/internal/*) — samma hemligheter som auth SIGNERAR med.
+      JWT_USER_SECRET: ${JWT_USER_SECRET}
+      JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
+      # HMAC över rå body på POST /webhooks/payment (mockbanken).
+      PAYMENT_WEBHOOK_SECRET: ${PAYMENT_WEBHOOK_SECRET}
+      # S2S mot billing (bankgiro->tenant, OCR/id->faktura) och auth
+      # (tjänste-token) — samma mönster som documents BILLING_BASE_URL/
+      # AUTH_BASE_URL/klientuppgifter.
+      BILLING_BASE_URL: http://billing:${BILLING_PORT}
+      AUTH_BASE_URL: http://auth:${AUTH_PORT}
+      PAYMENTS_CLIENT_ID: ${PAYMENTS_CLIENT_ID}
+      PAYMENTS_CLIENT_SECRET: ${PAYMENTS_CLIENT_SECRET}
+      PAYMENTS_CLIENT_SCOPES: ${PAYMENTS_CLIENT_SCOPES}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
       migrate:
+        condition: service_completed_successfully
+      seed:
         condition: service_completed_successfully
       redis:
         condition: service_healthy

@@ -78,6 +78,15 @@ declare_bound_queue() {
 echo "Deklarerar och binder konsumentköer."
 declare_bound_queue "documents.events" "invoice.sent" "invoice.credited"
 declare_bound_queue "billing.events" "invoice.delivery_updated"
+# EGEN kö, inte fler routing keys på billing.events: två separat
+# REGISTRERADE konsumenter (deliveries/consumer.ts och payments/consumer.ts)
+# på SAMMA kö skulle få RabbitMQ att round-robina meddelanden mellan dem
+# oavsett routing key — payment.matched kunde då hämtas av
+# leveranskonsumenten (som inte känner igen eventtypen) och tvärtom,
+# ungefär hälften av gångerna. En kö per konsument-registrering håller
+# fördelningen deterministisk (fas 5-planens avsnitt 3.2 nämnde
+# ursprungligen en delad kö — det här är en medveten, granskad avvikelse).
+declare_bound_queue "billing.payments.events" "payment.matched" "payment.partial"
 
 echo "Skapar tjänstekonton."
 
@@ -87,7 +96,10 @@ create_user() {
   # Behörigheter per tjänst, granskningsbart och smalt:
   #   configure : sin egen system.ping.<namn>-kö + sina egna "<namn>.*"-köer
   #               + system.ping-exchanget (fanout, deklareras av tjänsten)
-  #   write     : publicera på system.ping och events, binda sina egna köer
+  #   write     : publicera på system.ping och events, binda sina egna köer,
+  #               OCH publicera på default-exchanget ("amq.default"), som
+  #               krävs för konsumenternas x-attempts-ompublicering — se
+  #               nästa stycke.
   #   read      : konsumera sina egna köer, binda mot system.ping/events
   # "events" saknas medvetet ur "configure" (se ovan).
   curl -sf -u "$AUTH" -X PUT "$API/users/$name" \
@@ -98,9 +110,27 @@ create_user() {
   # bara på exchanget) — annars 403 vid varje bind. Se
   # https://www.rabbitmq.com/docs/access-control#permissions
   #
+  # "amq\\.default": default-exchangets INTERNA namn är tom sträng (""),
+  # men RabbitMQs behörighetskontroll för basic.publish mot det prövar
+  # regeln mot den STRÄNGEN "amq.default" (samma namn felmeddelandet
+  # visar: "write access to exchange 'amq.default' ... refused") — inte
+  # mot "" som man annars kan tro utifrån exchangets faktiska namn.
+  # Verifierat direkt mot Erlangs re-modul (samma motor RabbitMQ
+  # använder): "^($|...)$" matchar "" fint men INTE "amq.default".
+  #
+  # deliveries/consumer.ts och payments/consumer.ts republicerar VID FEL
+  # via just default-exchanget (channel.publish("", <kö>, ...) — routing
+  # key = könamnet är hur RabbitMQ routar via default-exchanget till en
+  # specifik kö utan en egen bindning). Utan den här behörigheten
+  # nekades publiceringen tyst (access_refused), och retry-/dead-letter-
+  # mekanismen kunde ALDRIG faktiskt försöka om ett meddelande — upptäckt
+  # under PR-granskning fas 5 (punkt 5/6) när en konfirmerad kanal gjorde
+  # den tidigare TYSTA nekade publiceringen till en KRASCH i stället,
+  # vilket avslöjade att behörigheten saknats sedan fas 4.
+  #
   # Hela JSON-payloaden skrivs som en enkelcitatad mall (så sh inte rör
   # backslash) och sed byter bara ut __NAME__. "configure" saknar "events".
-  permissions_json=$(printf '%s' '{"configure":"^(system\\.ping(\\.__NAME__)?|__NAME__\\..*)$","write":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$","read":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$"}' | sed "s/__NAME__/$name/g")
+  permissions_json=$(printf '%s' '{"configure":"^(system\\.ping(\\.__NAME__)?|__NAME__\\..*)$","write":"^(amq\\.default|system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$","read":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$"}' | sed "s/__NAME__/$name/g")
 
   curl -sf -u "$AUTH" -X PUT "$API/permissions/%2F/$name" \
     -H "Content-Type: application/json" \

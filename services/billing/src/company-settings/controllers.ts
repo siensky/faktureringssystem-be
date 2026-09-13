@@ -29,5 +29,17 @@ export function createCompanySettingsControllers(service: CompanySettingsService
         }),
       );
     },
+
+    /**
+     * S2S — till skillnad från getInternal anropas INTE
+     * requireTenantHeader här: tenanten är okänd, det är precis vad
+     * uppslaget ska avgöra.
+     */
+    async byBankgiro(
+      request: FastifyRequest<{ Querystring: { bankgiro: string } }>,
+      reply: FastifyReply,
+    ) {
+      return reply.send(await service.resolveTenantByBankgiro(request.query.bankgiro));
+    },
   };
 }

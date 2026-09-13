@@ -28,4 +28,12 @@ export function registerCompanySettingsRoutes(
     { preHandler: deps.requireService("billing:company:read") },
     c.getInternal,
   );
+  app.get<{ Querystring: { bankgiro: string } }>(
+    "/internal/company-settings/by-bankgiro",
+    {
+      preHandler: deps.requireService("billing:company:read"),
+      schema: { querystring: schema.byBankgiroQuery },
+    },
+    c.byBankgiro,
+  );
 }

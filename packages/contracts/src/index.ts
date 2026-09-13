@@ -13,3 +13,5 @@ export type { EventEnvelope } from "./generated/envelope";
 export type { InvoiceSentPayload } from "./generated/invoice-sent";
 export type { InvoiceCreditedPayload } from "./generated/invoice-credited";
 export type { InvoiceDeliveryUpdatedPayload } from "./generated/invoice-delivery-updated";
+export type { PaymentMatchedPayload } from "./generated/payment-matched";
+export type { PaymentPartialPayload } from "./generated/payment-partial";

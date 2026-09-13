@@ -9,6 +9,7 @@ import helmet from "@fastify/helmet";
 import rateLimit from "@fastify/rate-limit";
 import Fastify, { type FastifyInstance } from "fastify";
 import type { Logger } from "pino";
+import { loadEnvWithDefaults, parseIntEnv } from "../config";
 import { registerErrorHandler } from "../errors/handler";
 import { type ReadinessCheck, registerHealthRoutes } from "../health";
 import { startSystemPing } from "../ping";
@@ -30,7 +31,19 @@ const DEFAULT_BODY_LIMIT = 256 * 1024;
 // känsliga endpoints (login, BankID-init) läggs till i fas 1/2 — se planens
 // "Säkerhet: Rate limiting". Räknaren ligger i Redis så att flera repliker
 // delar den.
-const RATE_LIMIT_MAX = 300;
+//
+// Överbagbar via RATE_LIMIT_MAX — samma mönster som auths
+// AUTH_STRICT_RATE_LIMIT_MAX (services/auth/src/config.ts): produktion
+// behåller det säkra defaultvärdet, men CI/e2e sätter ett högre tak i
+// .env/.github/workflows/ci.yml. Den här gränsen är avsiktligt en trubbig
+// missbruksspärr, inte en precisionsjusterad säkerhetsgräns (den
+// finkorniga, per-konto-strypningen sitter någon annanstans) — en växande
+// e2e-svit (fem sviter från och med fas 5) är legitim trafik som gränsen
+// måste växa med, inte ett hål att stänga (PR-granskning fas 5,
+// CI-verifiering: en enda kall körning av hela e2e-sviten i CI kunde
+// annars träffa 300/min bara på legitim testtrafik).
+const rateLimitMaxEnv = loadEnvWithDefaults({ RATE_LIMIT_MAX: "300" });
+const RATE_LIMIT_MAX = parseIntEnv("RATE_LIMIT_MAX", rateLimitMaxEnv.RATE_LIMIT_MAX);
 const RATE_LIMIT_WINDOW = "1 minute";
 
 export interface StartServiceOptions {

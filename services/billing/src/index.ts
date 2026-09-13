@@ -23,6 +23,8 @@ import { createDeliveryService } from "./deliveries/service";
 import { requireAdmin } from "./guards";
 import { registerInvoiceRoutes } from "./invoices/routes";
 import { createInvoiceService } from "./invoices/services";
+import { startPaymentConsumer } from "./payments/consumer";
+import { createPaymentApplyService } from "./payments/service";
 
 const logger = createLogger(SERVICE_NAME);
 
@@ -112,9 +114,21 @@ startService({
       logger,
     });
 
+    // Konsumerar payment.matched/payment.partial från payments och skriver
+    // invoice_payments/invoices (architecture.md #20 — payments skriver
+    // aldrig hit direkt). Egen kö, egen konsument — se
+    // services/billing/src/payments/consumer.ts för varför den inte delar
+    // billing.events med deliveryConsumer.
+    const paymentConsumer = await startPaymentConsumer({
+      rabbit: ctx.rabbit,
+      service: createPaymentApplyService(sql, logger),
+      logger,
+    });
+
     app.addHook("onClose", async () => {
       publisher.stop();
       await deliveryConsumer.stop();
+      await paymentConsumer.stop();
       await sql.end({ timeout: 5 });
     });
   },
