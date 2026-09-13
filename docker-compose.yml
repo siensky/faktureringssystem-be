@@ -134,7 +134,12 @@ services:
     entrypoint: ["sh", "/init.sh"]
 
   minio:
-    image: minio/minio:latest
+    # quay.io, inte Docker Hub: minio/minio och minio/mc gick inte längre
+    # att dra anonymt från Docker Hub (pull access denied) — MinIO har
+    # flyttat sin publika distribution dit. Förbefintligt, orört av
+    # fas 5:s betalningslogik, men blockerade docker-build-and-smoke-test
+    # i CI för PR #5 tills det upptäcktes och fixades här.
+    image: quay.io/minio/minio:latest
     container_name: invoice_minio
     restart: unless-stopped
     command: server /data --console-address ":9001"
@@ -158,7 +163,7 @@ services:
   # documents får ALDRIG MinIO-root — samma resonemang som planens fas 7
   # för separata Postgres-roller (PR-granskning fas 4, punkt 13).
   minio-init:
-    image: minio/mc:latest
+    image: quay.io/minio/mc:latest
     container_name: invoice_minio_init
     depends_on:
       minio:
