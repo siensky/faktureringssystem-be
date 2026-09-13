@@ -1,10 +1,19 @@
 export type BankTransactionSource = "bgmax" | "webhook:mockbank";
-export type BankTransactionStatus = "matched" | "unmatched" | "manual_review" | "ignored";
+/**
+ * 'pending' = raden är skriven (dedup-nyckeln är tagen) men beslutet är
+ * INTE fattat än. Matchningsmotorn skriver alltid ALLA nya rader i det
+ * här läget innan den ens ringer billing — se matching/service.ts.
+ */
+export type BankTransactionStatus =
+  | "pending"
+  | "matched"
+  | "unmatched"
+  | "manual_review"
+  | "ignored";
 export type UnmatchedReason = "unknown_bankgiro" | "unknown_ocr" | "overpayment" | "ambiguous";
 
-/** Formen migrations/0006_payments.js:s bank_transactions_status_shape kräver. */
-export interface BankTransactionInsert {
-  tenantId: number | null;
+/** Raden som skrivs vid intag, innan matchningsmotorn fattat ett beslut. */
+export interface BankTransactionIntake {
   source: BankTransactionSource;
   externalId: string;
   bankgiro: string;
@@ -12,7 +21,12 @@ export interface BankTransactionInsert {
   payerName: string | null;
   amountOre: number;
   bookedAt: Date;
-  status: BankTransactionStatus;
+}
+
+/** Beslutet som löser en 'pending'-rad till ett slutgiltigt läge. */
+export interface BankTransactionDecision {
+  tenantId: number | null;
+  status: Exclude<BankTransactionStatus, "pending">;
   unmatchedReason: UnmatchedReason | null;
   matchedInvoiceId: number | null;
 }

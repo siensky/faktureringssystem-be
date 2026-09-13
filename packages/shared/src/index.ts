@@ -57,6 +57,7 @@ export {
   isValidPnr,
   isValidOrgNumber,
   isValidBankgiro,
+  normalizeBankgiro,
   luhn,
 } from "./swedish-id";
 export {

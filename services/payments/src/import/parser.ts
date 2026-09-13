@@ -4,12 +4,21 @@
 //
 // Format: en rad per transaktion, pipe-separerad, sex fält:
 //   bankgiro|ocr|amountOre|payerName|bookedDate|externalId
+// ocr är VALFRITT (tomt tillåtet) — en betalning utan OCR-referens är
+// det arketypiska unknown_ocr-fallet, inte ett fel (PR-granskning fas 5,
+// punkt 7): matchningsmotorns isValidOcr("") är redan false, så en tom
+// sträng landar naturligt i manual_review i stället för att avvisas här.
+// bankgiro är obligatoriskt — utan det går transaktionen inte att spåra
+// till NÅGON tenant, inte ens driftvyn (som kräver ett faktiskt
+// bankgiro-värde att visa).
+//
 // externalId är sista fältet och VALFRITT (tomt tillåtet): satt ->
 // external_id = värdet; tomt -> external_id härleds deterministiskt ur
-// (fileSha256, lineOrdinal) — se deriveExternalId. Tomma rader hoppas
-// över (radbrytnings-robusthet). En felformad rad (fel antal fält, eller
-// ogiltigt belopp/datum) ger ett RADSPECIFIKT fel utan att avbryta resten
-// av filen — en trasig rad ska inte kunna dölja 999 giltiga.
+// radens EGNA, normaliserade fält — se deriveExternalId. Tomma rader
+// hoppas över (radbrytnings-robusthet). En felformad rad (fel antal
+// fält, eller ogiltigt belopp/datum) ger ett RADSPECIFIKT fel utan att
+// avbryta resten av filen — en trasig rad ska inte kunna dölja 999
+// giltiga.
 
 import { createHash } from "node:crypto";
 
@@ -36,18 +45,37 @@ export type ParsedLine = ParsedLineOk | ParsedLineError;
 const FIELD_COUNT = 6;
 
 /**
- * Deterministisk härledd id: sha256(fileSha256 + ':' + lineOrdinal), hex
- * — samma stil som hashRequest i services/billing/src/idempotency.ts.
- * Samma fil parsad två gånger ger identiska nycklar (fileSha256 är
- * densamma, lineOrdinal räknas likadant); en ändrad fil ger en annan
- * fileSha256 och alltså andra nycklar — ingen falsk dedup mot en gammal
- * import.
+ * Deterministisk härledd id: sha256(lineOrdinal + ':' + radens EGNA
+ * normaliserade fält), hex. Hashas ur det PARSADE (trimmade) innehållet,
+ * INTE ur filens råa bytes — en tidigare version hashade
+ * (fileSha256, lineOrdinal), vilket gjorde nyckeln känslig för
+ * radbrytningsformat (CRLF kontra LF) trots att parsern själv är
+ * tolerant mot precis den skillnaden. En semantiskt identisk omexport
+ * från banken (bara annat radbrytningstecken) gav då NYA nycklar för
+ * varje rad — ingen dedup vid en ren formatskillnad, och en delbetalning
+ * kunde bokföras om (PR-granskning fas 5, punkt 8). lineOrdinal är kvar
+ * i hashen som tiebreaker: två rader med råkat identiska fältvärden i
+ * SAMMA fil (skilda verkliga transaktioner) ska ändå få olika nycklar.
  */
-export function deriveExternalId(fileSha256: string, lineOrdinal: number): string {
-  return createHash("sha256").update(`${fileSha256}:${lineOrdinal}`).digest("hex");
+export function deriveExternalId(
+  lineOrdinal: number,
+  bankgiro: string,
+  ocr: string,
+  amountOre: number,
+  payerName: string | null,
+  bookedAt: Date,
+): string {
+  const canonical = [
+    bankgiro,
+    ocr,
+    String(amountOre),
+    payerName ?? "",
+    bookedAt.toISOString(),
+  ].join("|");
+  return createHash("sha256").update(`${lineOrdinal}:${canonical}`).digest("hex");
 }
 
-function parseOne(raw: string, lineOrdinal: number, fileSha256: string): ParsedLine {
+function parseOne(raw: string, lineOrdinal: number): ParsedLine {
   const fields = raw.split("|");
   if (fields.length !== FIELD_COUNT) {
     return {
@@ -67,10 +95,13 @@ function parseOne(raw: string, lineOrdinal: number, fileSha256: string): ParsedL
   ];
 
   const bankgiro = bankgiroRaw.trim();
-  const ocr = ocrRaw.trim();
-  if (!bankgiro || !ocr) {
-    return { ok: false, lineOrdinal, raw, error: "bankgiro och ocr krävs" };
+  if (!bankgiro) {
+    return { ok: false, lineOrdinal, raw, error: "bankgiro krävs" };
   }
+  // Tomt tillåtet — se moduldocen ovan. isValidOcr("") är false, så
+  // matchningsmotorn landar raden i manual_review/unknown_ocr av sig
+  // själv, precis som ett OCR med fel Luhn-siffra.
+  const ocr = ocrRaw.trim();
 
   const amountOre = Number(amountRaw.trim());
   if (!Number.isInteger(amountOre) || amountOre <= 0) {
@@ -84,18 +115,14 @@ function parseOne(raw: string, lineOrdinal: number, fileSha256: string): ParsedL
   }
 
   const payerName = payerNameRaw.trim() || null;
-  const externalId = externalIdRaw.trim() || deriveExternalId(fileSha256, lineOrdinal);
+  const externalId =
+    externalIdRaw.trim() ||
+    deriveExternalId(lineOrdinal, bankgiro, ocr, amountOre, payerName, bookedAt);
 
   return { ok: true, lineOrdinal, bankgiro, ocr, amountOre, payerName, bookedAt, externalId };
 }
 
-/**
- * fileSha256 ska vara SHA-256 (hex) över HELA filens rå bytes, räknad av
- * anroparen (import/service.ts) — det är vad som gör härledda id:n
- * stabila mot en ordagrant identisk omimport men olika mot en redigerad
- * fil.
- */
-export function parseBgmaxLike(fileText: string, fileSha256: string): ParsedLine[] {
+export function parseBgmaxLike(fileText: string): ParsedLine[] {
   const lines = fileText.split(/\r\n|\n/).filter((line) => line.trim().length > 0);
-  return lines.map((line, i) => parseOne(line.trim(), i, fileSha256));
+  return lines.map((line, i) => parseOne(line.trim(), i));
 }

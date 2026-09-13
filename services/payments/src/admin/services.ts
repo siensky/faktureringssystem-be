@@ -9,6 +9,7 @@
 import type { PaymentMatchedPayload, PaymentPartialPayload } from "@faktura/contracts";
 import {
   Conflict,
+  type Logger,
   NotFound,
   type RequestContext,
   UnprocessableEntity,
@@ -37,7 +38,11 @@ export interface AdminBillingClient {
   ): Promise<InvoiceForMatching | undefined>;
 }
 
-export function createAdminPaymentsService(sql: Sql, billingClient: AdminBillingClient) {
+export function createAdminPaymentsService(
+  sql: Sql,
+  billingClient: AdminBillingClient,
+  logger: Logger,
+) {
   const repo = (ctx: RequestContext) => new AdminPaymentsRepository(sql, ctx);
 
   return {
@@ -53,7 +58,24 @@ export function createAdminPaymentsService(sql: Sql, billingClient: AdminBilling
      * anspråket städas bort), så ett senare försök med samma nyckel körs
      * om rent i stället för att spela upp ett permanent fel.
      */
-    async matchInTx(ctx: RequestContext, tx: TransactionSql, id: number, invoiceId: number) {
+    /**
+     * `acceptOverpayment` — se PR-granskning fas 5, punkt 4: en rad i
+     * manual_review med unmatched_reason='overpayment' gick tidigare
+     * INTE att lösa alls (matchning gav alltid 422, ignore bokför inget)
+     * — riktiga pengar fastnade permanent i kön. En admin som medvetet
+     * väljer att acceptera överbetalningen bokför nu HELA det mottagna
+     * beloppet (inte ett kapat/delat belopp — samma "bokför allt, larma
+     * om det inte täcks exakt"-princip som den automatiska vägens
+     * kapplöpningshantering i services/billing/src/payments/service.ts),
+     * och överskottet dokumenteras i granskningsloggen och larmas.
+     */
+    async matchInTx(
+      ctx: RequestContext,
+      tx: TransactionSql,
+      id: number,
+      invoiceId: number,
+      acceptOverpayment: boolean,
+    ) {
       const r = repo(ctx);
       const row = await r.lockForDecision(tx, id);
       if (!row) throw new NotFound("Transaktionen finns inte");
@@ -77,8 +99,24 @@ export function createAdminPaymentsService(sql: Sql, billingClient: AdminBilling
       }
 
       const amountOre = Number(row.amount_ore);
-      if (amountOre > resolved.remainingOre) {
-        throw new UnprocessableEntity("Beloppet överstiger fakturans kvarstående belopp");
+      const overpaymentOre = amountOre - resolved.remainingOre;
+      if (overpaymentOre > 0 && !acceptOverpayment) {
+        throw new UnprocessableEntity(
+          "Beloppet överstiger fakturans kvarstående belopp — sätt acceptOverpayment för att ändå bokföra",
+        );
+      }
+      if (overpaymentOre > 0) {
+        logger.error(
+          {
+            bankTransactionId: id,
+            invoiceId: resolved.currentInvoiceId,
+            tenantId: ctx.tenantId,
+            amountOre,
+            remainingOre: resolved.remainingOre,
+            overpaymentOre,
+          },
+          "LARM: manuell matchning accepterad trots överbetalning",
+        );
       }
 
       const changed = await r.markMatched(tx, id, resolved.currentInvoiceId);
@@ -88,7 +126,7 @@ export function createAdminPaymentsService(sql: Sql, billingClient: AdminBilling
         throw new Conflict("Transaktionen är redan avgjord");
       }
 
-      const eventType = amountOre === resolved.remainingOre ? "payment.matched" : "payment.partial";
+      const eventType = amountOre >= resolved.remainingOre ? "payment.matched" : "payment.partial";
       const payload: PaymentMatchedPayload | PaymentPartialPayload = {
         invoiceId: resolved.currentInvoiceId,
         amountOre,
@@ -114,7 +152,10 @@ export function createAdminPaymentsService(sql: Sql, billingClient: AdminBilling
         resourceType: "bank_transaction",
         resourceId: String(id),
         correlationId: ctx.correlationId,
-        metadata: { invoiceId: resolved.currentInvoiceId, amountOre },
+        metadata:
+          overpaymentOre > 0
+            ? { invoiceId: resolved.currentInvoiceId, amountOre, overpaymentOre }
+            : { invoiceId: resolved.currentInvoiceId, amountOre },
       });
 
       return {

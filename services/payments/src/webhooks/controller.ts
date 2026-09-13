@@ -17,7 +17,7 @@
 // bevisat sig med en giltig signatur, inget mer.
 
 import { randomUUID } from "node:crypto";
-import { BadRequest, Unauthorized } from "@faktura/shared";
+import { BadRequest, type Logger, Unauthorized } from "@faktura/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { MatchingService } from "../matching/service";
 import { timestampFresh, verifySignature } from "./signature";
@@ -25,7 +25,7 @@ import { timestampFresh, verifySignature } from "./signature";
 interface WebhookBody {
   id: string;
   bankgiro: string;
-  ocr: string;
+  ocr?: string;
   amountOre: number;
   payerName?: string;
   bookedAt: string;
@@ -39,11 +39,14 @@ function isWebhookBody(value: unknown): value is WebhookBody {
     v.id.length > 0 &&
     typeof v.bankgiro === "string" &&
     v.bankgiro.length > 0 &&
-    typeof v.ocr === "string" &&
-    v.ocr.length > 0 &&
+    // ocr FÅR vara tomt eller saknas — en betalning utan referens är
+    // det arketypiska unknown_ocr-fallet, inte ett formatfel
+    // (PR-granskning fas 5, punkt 7). isValidOcr("") i matchningsmotorn
+    // fångar det och dirigerar raden till manual_review, precis som ett
+    // OCR med fel Luhn-siffra.
+    (v.ocr === undefined || typeof v.ocr === "string") &&
     typeof v.amountOre === "number" &&
     Number.isInteger(v.amountOre) &&
-    v.amountOre > 0 &&
     typeof v.bookedAt === "string" &&
     !Number.isNaN(Date.parse(v.bookedAt)) &&
     (v.payerName === undefined || typeof v.payerName === "string")
@@ -53,6 +56,7 @@ function isWebhookBody(value: unknown): value is WebhookBody {
 export function createWebhookController(opts: {
   matchingService: MatchingService;
   webhookSecret: string;
+  logger: Logger;
 }) {
   return {
     async payment(request: FastifyRequest, reply: FastifyReply) {
@@ -79,14 +83,27 @@ export function createWebhookController(opts: {
         throw new BadRequest("Ogiltig JSON");
       }
       if (!isWebhookBody(parsed)) {
-        throw new BadRequest("id, bankgiro, ocr, amountOre och bookedAt krävs");
+        throw new BadRequest("id, bankgiro, amountOre och bookedAt krävs");
+      }
+      if (parsed.amountOre <= 0) {
+        // amount_ore > 0 är en DB-CHECK (migrations/0006_payments.js) —
+        // en återföring/korrigering med noll- eller negativt belopp kan
+        // inte representeras i bank_transactions under NÅGON status.
+        // Riktig reverserings-hantering är ett domänbeslut utanför fas
+        // 5:s scope, men avvisningen ska ALDRIG vara tyst (PR-granskning
+        // fas 5, punkt 7, domain.md #14) — larma innan 400:an.
+        opts.logger.error(
+          { bankgiro: parsed.bankgiro, amountOre: parsed.amountOre, externalId: parsed.id },
+          "LARM: webhook-betalning med amountOre <= 0 kan inte bokföras (reversering stöds inte i fas 5)",
+        );
+        throw new BadRequest("amountOre måste vara positivt");
       }
 
       const outcome = await opts.matchingService.match({
         source: "webhook:mockbank",
         externalId: parsed.id,
         bankgiro: parsed.bankgiro,
-        ocr: parsed.ocr,
+        ocr: parsed.ocr ?? "",
         amountOre: parsed.amountOre,
         payerName: parsed.payerName ?? null,
         bookedAt: new Date(parsed.bookedAt),

@@ -23,8 +23,19 @@ export function createAdminPaymentsControllers(service: AdminPaymentsService, sq
         tenantId: ctx.tenantId,
         key,
         endpoint: "POST /admin/payments/:id/match",
-        requestBody: { id: request.params.id, invoiceId: request.body.invoiceId },
-        run: (tx) => service.matchInTx(ctx, tx, request.params.id, request.body.invoiceId),
+        requestBody: {
+          id: request.params.id,
+          invoiceId: request.body.invoiceId,
+          acceptOverpayment: request.body.acceptOverpayment ?? false,
+        },
+        run: (tx) =>
+          service.matchInTx(
+            ctx,
+            tx,
+            request.params.id,
+            request.body.invoiceId,
+            request.body.acceptOverpayment ?? false,
+          ),
       });
       return reply.status(outcome.status).send(outcome.body);
     },

@@ -75,6 +75,22 @@ async function main(): Promise<void> {
         .filter(Boolean),
       description: "payments-tjänsten: bankgiro->tenant och OCR/id->faktura för matchning (fas 5)",
     },
+    {
+      clientId: required("PAYMENTS_OPS_CLIENT_ID"),
+      clientSecret: required("PAYMENTS_OPS_CLIENT_SECRET"),
+      // Ett DRIFT-konto, inte en tjänst: BgMax-liknande filimport och
+      // driftvyn för okänt bankgiro (GET /internal/ops/payments/
+      // unknown-bankgiro) har ingen körande tjänst som naturligt äger
+      // dem. Tidigare seedades ingen klient alls för de här scopen —
+      // bara e2e-sviten provisionerade sin egen engångsklient, så det
+      // fanns ingen väg för en riktig operatör att autentisera sig mot
+      // dem i en vanlig docker-compose-uppstart (PR-granskning fas 5,
+      // punkt 12).
+      scopes: (process.env.PAYMENTS_OPS_CLIENT_SCOPES ?? "payments:ops:import payments:ops:read")
+        .split(/\s+/)
+        .filter(Boolean),
+      description: "drift-konto: BgMax-filimport och driftvyn för okänt bankgiro (fas 5)",
+    },
   ];
 
   const sql = postgres(databaseUrl, { max: 1 });

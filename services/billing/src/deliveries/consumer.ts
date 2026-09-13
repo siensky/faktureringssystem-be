@@ -21,10 +21,17 @@
 //                                   x-attempts+1 till samma kö — headern
 //                                   överlever en omstart, till skillnad
 //                                   från redelivered. Efter MAX_ATTEMPTS
-//                                   ges meddelandet upp (ack + larm) så en
-//                                   förgiftad rad inte loopar hett. En
-//                                   riktig dead-letter-kö med larm läggs
-//                                   till i fas 7.
+//                                   ges meddelandet upp: nack (inte ack)
+//                                   med requeue=false, larm loggas, och
+//                                   meddelandet dead-lettras till
+//                                   events.dlx/events.dlq
+//                                   (infra/rabbitmq/init.sh) i stället
+//                                   för att kastas bort — så en förgiftad
+//                                   rad inte loopar hett OCH inte
+//                                   försvinner spårlöst (PR-granskning
+//                                   fas 5, punkt 6). Larm PÅ dead-letter-
+//                                   kön (inte bara i loggen) läggs till i
+//                                   fas 7.
 
 import {
   EnvelopeValidationError,
@@ -132,9 +139,14 @@ export async function startDeliveryConsumer(opts: {
       if (nextAttempts >= MAX_ATTEMPTS) {
         logger.error(
           { err: error, attempts: nextAttempts },
-          "delivery-consumer: transient fel, gav upp efter maxantal försök (se fas 7 DLQ)",
+          "delivery-consumer: transient fel, gav upp efter maxantal försök — dead-lettrar",
         );
-        channel.ack(msg);
+        // nack (inte ack!) med requeue=false: det är DET som faktiskt
+        // dead-lettrar meddelandet till events.dlx/events.dlq
+        // (infra/rabbitmq/init.sh). Ett ack hade bara kastat bort det —
+        // dead-letter-infrastrukturen fanns byggd men användes aldrig på
+        // den enda väg som behöver den (PR-granskning fas 5, punkt 6).
+        channel.nack(msg, false, false);
         return;
       }
       logger.warn(
@@ -142,7 +154,23 @@ export async function startDeliveryConsumer(opts: {
         "delivery-consumer: transient fel, försöker igen",
       );
       await sleep(REQUEUE_DELAY_MS);
-      await republishWithAttempt(msg, nextAttempts);
+      try {
+        await republishWithAttempt(msg, nextAttempts);
+      } catch (republishError) {
+        // onMessage anropas som "void onMessage(msg)" i channel.consume
+        // nedan — ett ofångat fel här (t.ex. en kanal/anslutning som
+        // stängts mitt i) skulle bli en unhandled rejection som Bun
+        // tolkar som fatal och kraschar HELA billing-processen för en
+        // enda meddelandeleverans (upptäckt under PR-granskning fas 5
+        // via services/billing/src/payments/consumer.ts — samma
+        // "void onMessage"-mönster, samma risk). Fångas lokalt i
+        // stället: meddelandet lämnas medvetet ounquittat, RabbitMQ
+        // levererar om det när kanalen/anslutningen återupprättas.
+        logger.error(
+          { err: republishError, attempts: nextAttempts },
+          "delivery-consumer: KRITISKT — kunde inte ompublicera för nytt försök, lämnar meddelandet ounquittat",
+        );
+      }
     }
   };
 

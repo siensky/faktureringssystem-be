@@ -11,7 +11,12 @@ export const matchBody = {
   type: "object",
   additionalProperties: false,
   required: ["invoiceId"],
-  properties: { invoiceId: { type: "integer", minimum: 1 } },
+  properties: {
+    invoiceId: { type: "integer", minimum: 1 },
+    // Se admin/types.ts:s MatchBody — krävs (true) för att bokföra en
+    // överbetalning, annars 422.
+    acceptOverpayment: { type: "boolean" },
+  },
 } as const;
 
 export const ignoreBody = {

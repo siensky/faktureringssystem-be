@@ -48,7 +48,7 @@ export const up = (pgm) => {
       received_at        TIMESTAMPTZ NOT NULL DEFAULT now(),
       updated_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
       status             TEXT NOT NULL
-        CHECK (status IN ('matched', 'unmatched', 'manual_review', 'ignored')),
+        CHECK (status IN ('pending', 'matched', 'unmatched', 'manual_review', 'ignored')),
       unmatched_reason   TEXT
         CHECK (unmatched_reason IN ('unknown_bankgiro', 'unknown_ocr', 'overpayment', 'ambiguous')),
       -- RESTRICT: en bokförd transaktion hör ihop med en faktura som inte
@@ -62,8 +62,18 @@ export const up = (pgm) => {
 
       -- Kopplar status till vilka övriga fält som MÅSTE/FÅR vara satta
       -- (database.md #19, samma mönster som customers_type_shape i 0004).
+      -- 'pending' = raden är skriven (dedup-nyckeln är tagen, pengarna är
+      -- spårade) men beslutet är INTE fattat än — matchningsmotorn
+      -- skriver alltid raden i 'pending' FÖRE den ringer billing, och
+      -- löser den till ett slutgiltigt läge EFTER. Det gör att ett
+      -- billing-avbrott mitt i matchningen aldrig tappar betalningen
+      -- (PR-granskning fas 5, punkt 2, domain.md #14) — en omleverans av
+      -- samma event/rad hittar den kvarstående 'pending'-raden och gör
+      -- om bara beslutssteget, inte hela skrivningen.
       CONSTRAINT bank_transactions_status_shape CHECK (
-        (status = 'matched'
+        (status = 'pending'
+          AND tenant_id IS NULL AND unmatched_reason IS NULL AND matched_invoice_id IS NULL)
+        OR (status = 'matched'
           AND tenant_id IS NOT NULL AND matched_invoice_id IS NOT NULL
           AND unmatched_reason IS NULL)
         OR (status = 'unmatched'
@@ -84,6 +94,35 @@ export const up = (pgm) => {
     -- Driftvyn: bara okänt-bankgiro-raderna, utanför tenant-modellen.
     CREATE INDEX bank_transactions_unknown_bankgiro_idx ON bank_transactions (received_at)
       WHERE tenant_id IS NULL;
+
+    -- Normalisera till rena siffror INNAN det unika indexet läggs på —
+    -- billing skrev tidigare bankgiro ordagrant (bindestreck/mellanslag
+    -- och allt), så "5555-5555" och "55555555" var olika strängar för
+    -- databasen trots att de är samma bankgiro (PR-granskning fas 5,
+    -- punkt 1). Utan den här städningen skulle CREATE UNIQUE INDEX
+    -- nedan antingen falla på en dold dubblett (två tenants som redan
+    -- skrivit "samma" bankgiro i olika format) eller, värre, lyckas
+    -- medan skenbart olika strängar ändå pekar på samma verkliga konto.
+    UPDATE company_settings
+    SET bankgiro = regexp_replace(bankgiro, '\\D', '', 'g')
+    WHERE bankgiro IS NOT NULL;
+
+    -- Om normaliseringen ovan avslöjade en RIKTIG kollision (två tenants
+    -- vars bankgiro nu är identiskt) kan det unika indexet inte skapas.
+    -- Det är database.md #2-korrekt beteende för en shippad rad i
+    -- produktion (en människa måste avgöra vem som äger numret) — men
+    -- den här migrationen introducerar SJÄLVA indexet, så det finns
+    -- ingen tidigare "rätt" ägare att luta sig mot. Behåll den tenant
+    -- som satte bankgirot SENAST (mest sannolikt aktuellt), nollställ
+    -- det på äldre krockande rader så de faller tillbaka till "inget
+    -- bankgiro satt" i stället för att blockera hela migrationen.
+    UPDATE company_settings AS cs
+    SET bankgiro = NULL
+    WHERE bankgiro IS NOT NULL
+      AND updated_at < (
+        SELECT max(cs2.updated_at) FROM company_settings AS cs2
+        WHERE cs2.bankgiro = cs.bankgiro AND cs2.tenant_id != cs.tenant_id
+      );
 
     -- Se filhuvudets kommentar om varför den här ligger här trots att
     -- company_settings ägs av billing. Partiellt unikt index (CONSTRAINT

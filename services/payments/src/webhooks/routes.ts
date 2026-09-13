@@ -13,13 +13,14 @@
 // i, precis som routes/decorators — se Fastifys egen dokumentation om
 // "encapsulation".
 
+import type { Logger } from "@faktura/shared";
 import type { FastifyInstance } from "fastify";
 import type { MatchingService } from "../matching/service";
 import { createWebhookController } from "./controller";
 
 export function registerWebhookRoutes(
   app: FastifyInstance,
-  deps: { matchingService: MatchingService; webhookSecret: string },
+  deps: { matchingService: MatchingService; webhookSecret: string; logger: Logger },
 ): void {
   app.register(async (instance) => {
     instance.addContentTypeParser(
@@ -33,6 +34,7 @@ export function registerWebhookRoutes(
     const c = createWebhookController({
       matchingService: deps.matchingService,
       webhookSecret: deps.webhookSecret,
+      logger: deps.logger,
     });
 
     instance.post("/webhooks/payment", c.payment);

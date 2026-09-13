@@ -121,7 +121,7 @@ startService({
     // billing.events med deliveryConsumer.
     const paymentConsumer = await startPaymentConsumer({
       rabbit: ctx.rabbit,
-      service: createPaymentApplyService(sql),
+      service: createPaymentApplyService(sql, logger),
       logger,
     });
 

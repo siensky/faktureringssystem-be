@@ -8,7 +8,7 @@
 // hundratals transaktioner. Native Fastify route-option, ingen ny
 // abstraktion.
 
-import { createHash, randomUUID } from "node:crypto";
+import { randomUUID } from "node:crypto";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { ImportService } from "./service";
 
@@ -34,14 +34,9 @@ export function registerImportRoutes(
       // parsning för att kunna verifiera en signatur över rå body FÖRE
       // parsning).
       const fileText = String(request.body ?? "");
-      const fileSha256 = createHash("sha256").update(fileText, "utf8").digest("hex");
       const correlationId = String(request.headers["x-correlation-id"] ?? "");
 
-      const summary = await importService.importFile(
-        fileText,
-        fileSha256,
-        correlationId || randomUUID(),
-      );
+      const summary = await importService.importFile(fileText, correlationId || randomUUID());
       return reply.status(200).send(summary);
     },
   );

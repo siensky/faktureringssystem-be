@@ -21,6 +21,13 @@ export interface BankTransactionForUpdate {
 
 export interface MatchBody {
   invoiceId: number;
+  /**
+   * Krävs (måste vara true) för att bokföra en rad vars belopp
+   * överstiger fakturans kvarstående belopp — utan den 422:ar en
+   * överbetalning fortfarande, precis som innan (PR-granskning fas 5,
+   * punkt 4). Medvetet val, inte ett automatiskt beteende.
+   */
+  acceptOverpayment?: boolean;
 }
 
 export interface IgnoreBody {

@@ -285,6 +285,41 @@ describe.skipIf(!RUN)("fas 5 e2e — payments", () => {
     expect(payB!.n).toBe(1);
   });
 
+  // PR-granskning fas 5, punkt 1 och 9: bankgiro normaliseras vid
+  // skrivning (rena siffror, bindestreck bortstrippat) — två tenants som
+  // skriver "samma" bankgiro i olika format ska kollidera på riktigt, och
+  // kollisionen ska ge 409, inte ett Postgres-503:a som dessutom
+  // bekräftar att en ANNAN tenant äger numret.
+  test("bankgiro normaliseras och en dubblett ger 409 utan att läcka vem som äger det", async () => {
+    // shared1 äger redan bgShared1 (satt i beforeAll). shared2 försöker
+    // sätta SAMMA bankgiro, med bindestreck runt mitten — normaliserat
+    // är det identiskt med shared1:s.
+    const formatted = `${bgShared1.slice(0, 4)}-${bgShared1.slice(4)}`;
+    const conflict = await putTo(
+      BILLING_URL,
+      "/admin/company-settings",
+      { companyName: "Konflikt AB", orgNumber: validOrgNumber(), bankgiro: formatted },
+      auth(shared2),
+    );
+    expect(conflict.status).toBe(409);
+    const body = JSON.stringify(await conflict.json());
+    expect(body).not.toContain(String(shared1.tenantId));
+
+    // Misslyckad skrivning lämnar shared2:s EGET bankgiro orört.
+    const stillShared2 = await getTo(BILLING_URL, "/admin/company-settings", auth(shared2));
+    expect(((await stillShared2.json()) as { bankgiro: string }).bankgiro).toBe(bgShared2);
+
+    // En inkommande betalning mot shared1:s RENA sifferform matchar
+    // fortfarande shared1, oavsett hur formatet som just krockade såg ut.
+    const byBg = await getTo(
+      BILLING_URL,
+      `/internal/company-settings/by-bankgiro?bankgiro=${bgShared1}`,
+      { authorization: `Bearer ${await billingServiceToken("billing:company:read")}` },
+    );
+    expect(byBg.status).toBe(200);
+    expect(((await byBg.json()) as { tenantId: number }).tenantId).toBe(shared1.tenantId);
+  });
+
   // ── Klart när #2: superseded fakturas OCR -> efterträdarens id ──────
   test("betalning på en superseded fakturas OCR landar på efterträdaren", async () => {
     const s = shared1;
@@ -369,6 +404,69 @@ describe.skipIf(!RUN)("fas 5 e2e — payments", () => {
       SELECT count(*)::int AS n FROM bank_transactions WHERE source = 'webhook:mockbank' AND external_id = ${id}
     `;
     expect(count!.n).toBe(1);
+  });
+
+  // PR-granskning fas 5, punkt 7: en betalning utan OCR-referens är det
+  // arketypiska unknown_ocr-fallet — ska landa i manual_review, inte
+  // avvisas vid dörren.
+  test("webhook: saknat OCR landar i manual_review/unknown_ocr, inte avvisat", async () => {
+    const s = shared1;
+    const bankgiro = bgShared1;
+
+    const res = await postWebhook({
+      id: `evt-no-ocr-${uniq()}`,
+      bankgiro,
+      amountOre: 5000,
+      bookedAt: new Date().toISOString(),
+      // ocr medvetet utelämnat.
+    });
+    expect(res.status).toBe(200);
+    expect(((await res.json()) as { status: string }).status).toBe("accepted");
+
+    const items = await until(async () => {
+      const r = await getTo(PAYMENTS_URL, "/admin/payments/unmatched", auth(s));
+      const body = (await r.json()) as { items: Array<{ ocr: string; unmatchedReason: string }> };
+      return body.items.find((i) => i.ocr === "") ? body.items : undefined;
+    });
+    const row = items.find((i) => i.ocr === "");
+    expect(row?.unmatchedReason).toBe("unknown_ocr");
+  });
+
+  // PR-granskning fas 5, punkt 2: skriver raden FÖRE billing rings, i
+  // status 'pending'. Simulerar ett tidigare avbrutet försök genom att
+  // sätta in raden direkt via SQL i just det läget, och bevisar att en
+  // omleverans av SAMMA event löser den (bokför betalningen) i stället
+  // för att bara skriva "duplicate" och lämna pengarna spårlösa.
+  test("webhook: en kvarstående 'pending'-rad löses av en omleverans, räknas inte som duplicate", async () => {
+    const s = shared1;
+    const bankgiro = bgShared1;
+    const inv = await sentInvoice(s, ONE_LINE, shared1CustomerId);
+    const externalId = `evt-pending-${uniq()}`;
+
+    // Simulerar att ett tidigare webhook-försök hann skriva 'pending'-
+    // raden men aldrig nådde fram till billing (t.ex. ett avbrott).
+    await sql`
+      INSERT INTO bank_transactions (source, external_id, bankgiro, ocr, amount_ore, booked_at, status)
+      VALUES ('webhook:mockbank', ${externalId}, ${bankgiro}, ${inv.ocr}, ${FULL_AMOUNT_ORE}, now(), 'pending')
+    `;
+
+    const res = await postWebhook({
+      id: externalId,
+      bankgiro,
+      ocr: inv.ocr,
+      amountOre: FULL_AMOUNT_ORE,
+      bookedAt: new Date().toISOString(),
+    });
+    expect(res.status).toBe(200);
+    // INTE 'duplicate' — den kvarstående pending-raden ska LÖSAS, inte
+    // tolkas som redan avgjord.
+    expect(((await res.json()) as { status: string }).status).toBe("accepted");
+
+    await until(async () => (await invoiceStatus(s, inv.id)) === "paid");
+    const [txRow] = await sql<
+      { status: string }[]
+    >`SELECT status FROM bank_transactions WHERE source = 'webhook:mockbank' AND external_id = ${externalId}`;
+    expect(txRow!.status).toBe("matched");
   });
 
   // ── Okänt bankgiro: driftvyn, osynlig för alla tenants ──────────────
@@ -528,6 +626,55 @@ describe.skipIf(!RUN)("fas 5 e2e — payments", () => {
     `;
     expect(payCount!.n).toBe(1); // ingen dubbelskrivning trots två anrop
 
+    const [txRow] = await sql<
+      { status: string }[]
+    >`SELECT status FROM bank_transactions WHERE id = ${row.id}`;
+    expect(txRow!.status).toBe("matched");
+  });
+
+  // PR-granskning fas 5, punkt 4: en manual_review-rad märkt overpayment
+  // gick tidigare INTE att lösa på något sätt — matchning gav alltid
+  // 422, ignore bokförde inget. acceptOverpayment är den enda vägen ut.
+  test("admin match med acceptOverpayment: bokför en tidigare olösbar överbetalning", async () => {
+    const s = shared1;
+    const bankgiro = bgShared1;
+    const target = await sentInvoice(s, SMALL_LINE, shared1CustomerId);
+
+    // target.ocr resolver till target med en LEVANDE remainingOre som är
+    // mindre än det inbetalda beloppet — det är det som faktiskt utlöser
+    // 'overpayment' (till skillnad från övriga tester i den här filen,
+    // som medvetet använder ett OKÄNT OCR och matchar manuellt mot en
+    // godtycklig faktura).
+    await payWebhook({ bankgiro, ocr: target.ocr, amountOre: SMALL_AMOUNT_ORE + 500_00 });
+    const row = await until(async () => {
+      const r = await getTo(PAYMENTS_URL, "/admin/payments/unmatched", auth(s));
+      const body = (await r.json()) as {
+        items: Array<{ id: number; ocr: string; unmatchedReason: string }>;
+      };
+      return body.items.find((i) => i.ocr === target.ocr);
+    });
+    expect(row.unmatchedReason).toBe("overpayment");
+
+    // Utan flaggan: fortfarande 422, oförändrat beteende.
+    const stillBlocked = await postTo(
+      PAYMENTS_URL,
+      `/admin/payments/${row.id}/match`,
+      { invoiceId: target.id },
+      idem(s),
+    );
+    expect(stillBlocked.status).toBe(422);
+
+    // Med flaggan: bokförs, fakturan blir betald, raden lämnar manual_review.
+    const accepted = await postTo(
+      PAYMENTS_URL,
+      `/admin/payments/${row.id}/match`,
+      { invoiceId: target.id, acceptOverpayment: true },
+      idem(s),
+    );
+    expect(accepted.status).toBe(200);
+    expect(((await accepted.json()) as { status: string }).status).toBe("matched");
+
+    await until(async () => (await invoiceStatus(s, target.id)) === "paid");
     const [txRow] = await sql<
       { status: string }[]
     >`SELECT status FROM bank_transactions WHERE id = ${row.id}`;

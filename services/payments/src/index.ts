@@ -60,9 +60,10 @@ startService({
     registerWebhookRoutes(app, {
       matchingService,
       webhookSecret: config.paymentWebhookSecret,
+      logger,
     });
 
-    const adminPaymentsService = createAdminPaymentsService(sql, billingClient);
+    const adminPaymentsService = createAdminPaymentsService(sql, billingClient, logger);
     registerAdminPaymentsRoutes(app, adminPaymentsService, sql, { userChain });
 
     const importService = createImportService({ matchingService, logger });

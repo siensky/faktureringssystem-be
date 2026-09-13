@@ -76,3 +76,18 @@ export function isValidBankgiro(input: string): boolean {
   const digits = input.replace(/\D/g, "");
   return (digits.length === 7 || digits.length === 8) && luhn(digits);
 }
+
+/**
+ * Kanoniserar ett bankgironummer till rena siffror (inga bindestreck/
+ * mellanslag). Bor i shared av samma skäl som normalizePnr: billing
+ * (skriver company_settings.bankgiro) och payments (slår upp och
+ * lagrar bank_transactions.bankgiro) måste normalisera EXAKT likadant,
+ * annars kan två tenants skriva samma bankgiro i olika format och båda
+ * smyga förbi det partiella unika indexet på company_settings.bankgiro
+ * (PR-granskning fas 5, punkt 1 — "5555-5555" och "55555555" ansågs
+ * olika strängar och kolliderade aldrig, men matchade heller aldrig en
+ * inkommande betalnings rena sifferform).
+ */
+export function normalizeBankgiro(input: string): string {
+  return input.replace(/\D/g, "");
+}

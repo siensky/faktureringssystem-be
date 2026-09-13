@@ -40,7 +40,7 @@ export type MatchOutcome =
   | {
       kind: "written";
       id: number;
-      status: BankTransactionStatus;
+      status: Exclude<BankTransactionStatus, "pending">;
       tenantId: number | null;
       unmatchedReason: UnmatchedReason | null;
       matchedInvoiceId: number | null;
