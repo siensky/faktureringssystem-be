@@ -221,6 +221,10 @@ services:
       BANKID_PROVIDER: ${BANKID_PROVIDER:-mock}
       JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
+      # Grov global missbruksspärr (packages/shared/src/service/index.ts),
+      # inte den finkorniga strypningen ovan. Höjs i .env/CI — se den
+      # filens kommentar om varför (PR-granskning fas 5).
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
@@ -259,6 +263,7 @@ services:
       # nycklar. PNR_HMAC_KEY delas med auth så BankID kan slå upp kunden.
       PNR_ENCRYPTION_KEY: ${PNR_ENCRYPTION_KEY}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy
@@ -303,6 +308,7 @@ services:
       PAYMENTS_CLIENT_ID: ${PAYMENTS_CLIENT_ID}
       PAYMENTS_CLIENT_SECRET: ${PAYMENTS_CLIENT_SECRET}
       PAYMENTS_CLIENT_SCOPES: ${PAYMENTS_CLIENT_SCOPES}
+      RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
     depends_on:
       db:
         condition: service_healthy

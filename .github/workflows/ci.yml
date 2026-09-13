@@ -138,6 +138,13 @@ jobs:
           JWT_USER_SECRET=ci_jwt_user_secret_not_a_real_secret_0000000000
           AUTH_TOKEN_PEPPER=00000000000000000000000000000000000000000000000000000000000000ff
           AUTH_STRICT_RATE_LIMIT_MAX=5000
+          # Grov global missbruksspärr (packages/shared/src/service/
+          # index.ts, produktionsdefault 300) — höjd här av samma skäl
+          # som AUTH_STRICT_RATE_LIMIT_MAX ovan. En enda kall körning av
+          # hela e2e-sviten (fem sviter från och med fas 5) kunde annars
+          # träffa 300/min på ren legitim testtrafik, mot billing
+          # specifikt (PR-granskning fas 5, upptäckt via CI).
+          RATE_LIMIT_MAX=5000
           JWT_SERVICE_SECRET=ci_jwt_service_secret_not_a_real_secret_00000
           PNR_HMAC_KEY=000000000000000000000000000000000000000000000000000000000000abcd
           S3_BUCKET=invoices
