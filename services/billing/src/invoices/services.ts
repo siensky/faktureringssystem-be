@@ -695,7 +695,7 @@ export function createInvoiceService(sql: Sql) {
       await repo.advanceTemplateDate(
         tx,
         template.id,
-        advanceByInterval(template.next_generation_date, template.interval),
+        advanceByInterval(template.next_generation_date, template.interval, template.billing_day),
       );
 
       return { created: true, invoiceId: invoice.id };

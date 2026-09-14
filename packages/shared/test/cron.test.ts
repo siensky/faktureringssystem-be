@@ -56,4 +56,14 @@ describe("nextDailyRunAt", () => {
     const next = nextDailyRunAt(new Date("2026-01-31T10:00:00Z"), 3, STOCKHOLM);
     expect(next.toISOString()).toBe("2026-02-01T02:00:00.000Z");
   });
+
+  // Kodgranskning PR #6, fynd 5: hour: 3 hamnar aldrig i en DST-lucka i
+  // Stockholm (det är hela poängen med valet), men funktionen är
+  // exporterad generiskt. 02:00 den 29 mars 2026 existerar INTE — klockan
+  // hoppar 02:00 CET -> 03:00 CEST rakt över den — så en framtida
+  // anropare som (fel) väljer hour: 2 ska få ett tydligt fel, inte en
+  // tyst-fel instans i närheten.
+  test("kastar för ett klockslag som inte existerar (DST-luckan, hour: 2)", () => {
+    expect(() => nextDailyRunAt(new Date("2026-03-28T12:00:00Z"), 2, STOCKHOLM)).toThrow();
+  });
 });

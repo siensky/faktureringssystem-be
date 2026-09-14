@@ -95,6 +95,10 @@ export interface InvoiceTemplateRow {
   customer_id: number;
   interval: RecurrenceInterval;
   next_generation_date: string;
+  // Ursprungligt, ALDRIG klampat ankardygn (1-31) — migrations/0007. Se
+  // advanceByInterval för varför det måste hållas isär från
+  // next_generation_date (kodgranskning PR #6, fynd 3).
+  billing_day: number;
   is_active: boolean;
   template_data: TemplateData;
   created_at: Date;

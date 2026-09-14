@@ -317,7 +317,7 @@ export class InvoiceRepository extends TenantScopedRepository {
   async findDueTemplates(today: string, db: Db = this.sql): Promise<InvoiceTemplateRow[]> {
     return db<InvoiceTemplateRow[]>`
       SELECT id, tenant_id, customer_id, interval, next_generation_date::text AS next_generation_date,
-             is_active, template_data, created_at, updated_at
+             billing_day, is_active, template_data, created_at, updated_at
       FROM invoice_templates
       WHERE tenant_id = ${this.tenantId} AND is_active AND next_generation_date <= ${today}
       ORDER BY id
@@ -328,7 +328,7 @@ export class InvoiceRepository extends TenantScopedRepository {
   async lockTemplate(tx: TransactionSql, id: number): Promise<InvoiceTemplateRow | undefined> {
     const [row] = await tx<InvoiceTemplateRow[]>`
       SELECT id, tenant_id, customer_id, interval, next_generation_date::text AS next_generation_date,
-             is_active, template_data, created_at, updated_at
+             billing_day, is_active, template_data, created_at, updated_at
       FROM invoice_templates WHERE id = ${id} AND tenant_id = ${this.tenantId} FOR UPDATE
     `;
     return row;

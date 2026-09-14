@@ -8,6 +8,17 @@
 // Ingen extern cron-biblioteks-beroende (architecture.md #24, "välj den
 // tråkiga lösningen") — bara en setTimeout-loop, samma mönster som
 // startOutboxPublisher.
+//
+// nextDailyRunAt/startDailyTimer exporteras generiskt från packages/shared
+// och är i DAG bara anropade med hour: 3 (billing- och auth-cronen), ett
+// klockslag som ALDRIG hamnar i en DST-lucka i Europe/Stockholm — det är
+// precis poängen ovan. En framtida anropare som väljer ett annat klockslag
+// (t.ex. 02:xx, som inte existerar den svenska vårdagen klockan ställs
+// fram) skulle annars tyst få ett närmevärde tillbaka i stället för ett
+// fel (kodgranskning PR #6, fynd 5). utcInstantForLocalWallTime failar
+// därför STÄNGT: hittar fixpunktsiterationen ingen instans som verkligen
+// läses tillbaka som den begärda lokala tiden, kastas ett tydligt fel i
+// stället för att gissa.
 
 import type { Logger } from "pino";
 
@@ -147,6 +158,14 @@ function addOneUtcDay(
  * gissningen FAKTISKT blir i `timeZone`, och korrigera mellanskillnaden.
  * Offset ändras bara i heltalstimmar, så tre varv räcker med marginal.
  */
+/**
+ * Kastar om den begärda lokala tiden inte existerar i `timeZone` (t.ex.
+ * 02:30 under en vår-DST-lucka) — se filhuvudet. En sådan tid mappar aldrig
+ * tillbaka till exakt sig själv oavsett UTC-gissning (kalendern hoppar rakt
+ * över den), så fixpunktsiterationen konvergerar aldrig till diff === 0 för
+ * just det fallet — det är signalen att failas stängt på, i stället för att
+ * tyst returnera en tid i närheten som INTE var den som begärdes.
+ */
 function utcInstantForLocalWallTime(
   year: number,
   month: number,
@@ -158,12 +177,24 @@ function utcInstantForLocalWallTime(
 ): Date {
   const targetWallMs = Date.UTC(year, month - 1, day, hour, minute, second);
   let guessMs = targetWallMs;
+  let converged = false;
   for (let i = 0; i < 3; i++) {
     const p = localParts(new Date(guessMs), timeZone);
     const guessWallMs = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
     const diff = targetWallMs - guessWallMs;
-    if (diff === 0) break;
+    if (diff === 0) {
+      converged = true;
+      break;
+    }
     guessMs += diff;
+  }
+  if (!converged) {
+    const hh = String(hour).padStart(2, "0");
+    const mm = String(minute).padStart(2, "0");
+    const ss = String(second).padStart(2, "0");
+    throw new Error(
+      `nextDailyRunAt: ${year}-${String(month).padStart(2, "0")}-${String(day).padStart(2, "0")} ${hh}:${mm}:${ss} finns inte i ${timeZone} (troligen en DST-lucka)`,
+    );
   }
   return new Date(guessMs);
 }

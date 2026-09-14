@@ -56,6 +56,14 @@ function pastDate(daysAgo: number): string {
   return d.toISOString().slice(0, 10);
 }
 
+/** Datum + dess dag-i-månaden N hela kalendermånader tillbaka — för
+ * invoice_templates.billing_day, som ska motsvara det datum som sätts. */
+function monthsAgo(n: number): { date: string; billingDay: number } {
+  const d = new Date();
+  d.setUTCMonth(d.getUTCMonth() - n);
+  return { date: d.toISOString().slice(0, 10), billingDay: d.getUTCDate() };
+}
+
 describe.skipIf(!RUN)("fas 6 e2e — automatisering", () => {
   let sql: ReturnType<typeof postgres>;
   const tenantIds: number[] = [];
@@ -265,10 +273,11 @@ describe.skipIf(!RUN)("fas 6 e2e — automatisering", () => {
     await fillCompanySettings(admin);
     const customerId = await makeCustomer(admin);
 
+    const due = { date: pastDate(1), billingDay: new Date(pastDate(1)).getUTCDate() };
     const [{ id: templateId }] = await sql<{ id: number }[]>`
-      INSERT INTO invoice_templates (tenant_id, customer_id, interval, next_generation_date, is_active, template_data)
+      INSERT INTO invoice_templates (tenant_id, customer_id, interval, next_generation_date, billing_day, is_active, template_data)
       VALUES (
-        ${admin.tenantId}, ${customerId}, 'monthly', ${pastDate(1)}, true,
+        ${admin.tenantId}, ${customerId}, 'monthly', ${due.date}, ${due.billingDay}, true,
         ${sql.json({ customerId, lines: ONE_LINE })}
       )
       RETURNING id
@@ -300,5 +309,41 @@ describe.skipIf(!RUN)("fas 6 e2e — automatisering", () => {
       SELECT count(*)::int AS n FROM invoices WHERE parent_template_id = ${templateId}
     `;
     expect(generatedCount).toBe(1); // ingen dubblett av andra körningen
+  });
+
+  // Kodgranskning PR #6, fynd 4: en mall som blivit liggande FLERA
+  // perioder efter (t.ex. en tenant avstängd länge) ska hämta ikapp hela
+  // eftersläpet i EN körning, inte droppa ut en faktura per natt.
+  test("hämtar ikapp flera eftersläpande perioder i EN körning", async () => {
+    const admin = await newAdmin("cronbacklog");
+    await fillCompanySettings(admin);
+    const customerId = await makeCustomer(admin);
+
+    const behind = monthsAgo(3);
+    const [{ id: templateId }] = await sql<{ id: number }[]>`
+      INSERT INTO invoice_templates (tenant_id, customer_id, interval, next_generation_date, billing_day, is_active, template_data)
+      VALUES (
+        ${admin.tenantId}, ${customerId}, 'monthly', ${behind.date}, ${behind.billingDay}, true,
+        ${sql.json({ customerId, lines: ONE_LINE })}
+      )
+      RETURNING id
+    `;
+
+    const token = await opsToken(OPS_CLIENT_ID, OPS_CLIENT_SECRET, "billing:ops:run");
+    const res = await runAutomation(token);
+    expect(res.status).toBe(200);
+
+    const [{ n: generatedCount }] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM invoices WHERE parent_template_id = ${templateId}
+    `;
+    // 3 månader efter -> minst 3 fakturor i SAMMA körning (inte en per natt).
+    expect(generatedCount).toBeGreaterThanOrEqual(3);
+
+    const [{ next_generation_date }] = await sql<{ next_generation_date: string }[]>`
+      SELECT next_generation_date FROM invoice_templates WHERE id = ${templateId}
+    `;
+    // Loopen stannar bara när mallen INTE längre är mogen — dvs framrullad
+    // till efter dagens datum.
+    expect(new Date(next_generation_date) > new Date(Date.now() - 24 * 3600_000)).toBe(true);
   });
 });
