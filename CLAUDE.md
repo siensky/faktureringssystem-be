@@ -39,4 +39,4 @@ AI-hjälp är fortsatt värdefull utöver implementationen: frågor, förklaring
 
 ## Status
 
-Fas 0–3 mergade. Fas 4 (documents: PDF, S3, e-postutskick, leveransstatus) ligger i PR och väntar på granskning. Full arkitektur: se plan-filen i `~/.claude/plans/`.
+Fas 0–5 mergade. Fas 6 (automatisering: dagligt cronjobb i billing — overdue, påminnelser, återkommande fakturor, städning; plus en liten egen token-städning i auth) ligger i PR och väntar på granskning. Full arkitektur: se plan-filen i `~/.claude/plans/`.

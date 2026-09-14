@@ -7,6 +7,7 @@ import {
   createRequireService,
   createRequireUser,
   publishConfirmed,
+  startDailyTimer,
   startService,
 } from "@faktura/shared";
 import { registerAuthRoutes } from "./auth/routes";
@@ -20,6 +21,7 @@ import { registerInternalFixtures } from "./internal";
 import { registerM2mRoutes } from "./m2m/routes";
 import { createM2mService } from "./m2m/services";
 import { EVENTS_EXCHANGE, startOutboxPublisher } from "./outbox";
+import { createTokenCleanupRunner } from "./token-cleanup";
 
 const logger = createLogger(SERVICE_NAME);
 
@@ -80,6 +82,18 @@ startService({
 
     registerInternalFixtures(app, { requireUser, requireService });
 
+    // Fas 6 (PLAN.md): "städa utgångna user_tokens" — user_tokens ägs av
+    // auth (architecture.md #1), så den delen av det dagliga jobbet bor
+    // här, inte i billings automation-modul. Se token-cleanup.ts.
+    const tokenCleanup = createTokenCleanupRunner({ sql, redis: ctx.redis, logger });
+    const tokenCleanupTimer = startDailyTimer({
+      timeZone: "Europe/Stockholm",
+      hour: 3,
+      jobName: "auth-token-cleanup",
+      logger,
+      run: () => tokenCleanup.runOnce(),
+    });
+
     const publisher = startOutboxPublisher({
       sql,
       sourceService: SERVICE_NAME,
@@ -107,6 +121,7 @@ startService({
     });
 
     app.addHook("onClose", async () => {
+      tokenCleanupTimer.stop();
       publisher.stop();
       await sql.end({ timeout: 5 });
     });

@@ -67,6 +67,11 @@ services:
       PAYMENTS_OPS_CLIENT_ID: ${PAYMENTS_OPS_CLIENT_ID}
       PAYMENTS_OPS_CLIENT_SECRET: ${PAYMENTS_OPS_CLIENT_SECRET}
       PAYMENTS_OPS_CLIENT_SCOPES: ${PAYMENTS_OPS_CLIENT_SCOPES}
+      # Drift-konto för POST /internal/automation/run (fas 6) — samma
+      # motivering som PAYMENTS_OPS_CLIENT_* ovan.
+      BILLING_OPS_CLIENT_ID: ${BILLING_OPS_CLIENT_ID}
+      BILLING_OPS_CLIENT_SECRET: ${BILLING_OPS_CLIENT_SECRET}
+      BILLING_OPS_CLIENT_SCOPES: ${BILLING_OPS_CLIENT_SCOPES}
     depends_on:
       db:
         condition: service_healthy

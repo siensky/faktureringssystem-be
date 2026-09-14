@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addDays, todayInStockholm } from "../src/domain/dates";
+import { addDays, advanceByInterval, todayInStockholm } from "../src/domain/dates";
 
 describe("todayInStockholm", () => {
   test("svensk sommartid ligger före UTC-midnatt", () => {
@@ -29,5 +29,51 @@ describe("addDays", () => {
   });
   test("noll dygn ger samma datum", () => {
     expect(addDays("2026-05-05", 0)).toBe("2026-05-05");
+  });
+});
+
+// Fas 6: invoice_templates.next_generation_date rullas fram med
+// advanceByInterval. Ren kalenderräkning (ingen DST-påverkan — bara
+// klockslag/dygnsaddition rör vid det), men månadslängd varierar och ska
+// KLAMPAS mot det ORIGINALA ankardygnet (billing_day), inte mot förra
+// periodens (kanske redan klampade) datum — annars driver mallen permanent
+// iväg (kodgranskning PR #6, fynd 3, se advanceByInterval:s docstring).
+describe("advanceByInterval", () => {
+  test("monthly inom samma år", () => {
+    expect(advanceByInterval("2026-01-15", "monthly", 15)).toBe("2026-02-15");
+  });
+  test("monthly klampar vid kortare målmånad (31 jan -> feb)", () => {
+    expect(advanceByInterval("2026-01-31", "monthly", 31)).toBe("2026-02-28"); // 2026 ej skottår
+  });
+  test("monthly klampar vid skottår", () => {
+    expect(advanceByInterval("2028-01-31", "monthly", 31)).toBe("2028-02-29"); // 2028 är skottår
+  });
+  test("monthly över årsskifte", () => {
+    expect(advanceByInterval("2026-12-15", "monthly", 15)).toBe("2027-01-15");
+  });
+  test("quarterly", () => {
+    expect(advanceByInterval("2026-01-31", "quarterly", 31)).toBe("2026-04-30");
+  });
+  test("quarterly över årsskifte", () => {
+    expect(advanceByInterval("2026-11-30", "quarterly", 30)).toBe("2027-02-28");
+  });
+  test("yearly på skottdagen -> icke-skottår klampar till 28 feb", () => {
+    expect(advanceByInterval("2028-02-29", "yearly", 29)).toBe("2029-02-28");
+  });
+  test("yearly på en vanlig dag", () => {
+    expect(advanceByInterval("2026-06-15", "yearly", 15)).toBe("2027-06-15");
+  });
+
+  test("återhämtar ankardygnet efter en kort månad (fynd 3, kodgranskning PR #6)", () => {
+    const billingDay = 31;
+    const afterJan = advanceByInterval("2026-01-31", "monthly", billingDay);
+    expect(afterJan).toBe("2026-02-28"); // klampat — februari har bara 28 dagar 2026
+
+    // Kedjar vidare från februaris (redan klampade) datum, precis som
+    // services.ts gör varje körning. Klampar man mot next_generation_date
+    // egen dag (28) i stället för det bevarade ankardygnet blir detta FEL
+    // "2026-03-28" — mars har 31 dagar och ska återhämta den sanna 31:an.
+    const afterFeb = advanceByInterval(afterJan, "monthly", billingDay);
+    expect(afterFeb).toBe("2026-03-31");
   });
 });

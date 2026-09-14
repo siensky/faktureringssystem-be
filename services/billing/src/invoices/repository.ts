@@ -6,7 +6,13 @@ import { TenantScopedRepository } from "@faktura/shared";
 import type { JsonObject } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
 import type { CustomerRow } from "../customers/types";
-import type { InvoiceItemRow, InvoiceRow, InvoiceStatus, InvoiceType } from "./types";
+import type {
+  InvoiceItemRow,
+  InvoiceRow,
+  InvoiceStatus,
+  InvoiceTemplateRow,
+  InvoiceType,
+} from "./types";
 
 type Db = Sql | TransactionSql;
 
@@ -28,6 +34,7 @@ export interface InsertInvoiceData {
   totalInclVatOre: number;
   creditsInvoiceId?: number | null;
   remindsInvoiceId?: number | null;
+  parentTemplateId?: number | null;
 }
 
 export interface InsertItemData {
@@ -76,13 +83,13 @@ export class InvoiceRepository extends TenantScopedRepository {
         tenant_id, customer_id, invoice_number, ocr_number, invoice_type, status,
         date_issued, date_due, currency,
         total_excl_vat_ore, total_vat_ore, total_incl_vat_ore,
-        credits_invoice_id, reminds_invoice_id
+        credits_invoice_id, reminds_invoice_id, parent_template_id
       ) VALUES (
         ${this.tenantId}, ${data.customerId}, ${data.invoiceNumber}, ${data.ocrNumber},
         ${data.invoiceType}, ${data.status},
         ${data.dateIssued}, ${data.dateDue}, ${data.currency},
         ${data.totalExclVatOre}, ${data.totalVatOre}, ${data.totalInclVatOre},
-        ${data.creditsInvoiceId ?? null}, ${data.remindsInvoiceId ?? null}
+        ${data.creditsInvoiceId ?? null}, ${data.remindsInvoiceId ?? null}, ${data.parentTemplateId ?? null}
       )
       RETURNING *
     `;
@@ -253,5 +260,84 @@ export class InvoiceRepository extends TenantScopedRepository {
       WHERE invoice_id = ${invoiceId} AND tenant_id = ${this.tenantId}
     `;
     return Number(row?.paid ?? 0);
+  }
+
+  /**
+   * Fas 6: sent -> overdue för fakturor vars förfallodatum passerat. Rent
+   * urvalsvillkor (planens Idempotens #7) — en andra körning samma dag
+   * hittar ingenting (raderna är redan 'overdue', inte längre 'sent'), så
+   * det behövs ingen egen markering av att jobbet redan kört.
+   */
+  async markOverdueBulk(today: string, db: Db = this.sql): Promise<number> {
+    const rows = await db`
+      UPDATE invoices SET status = 'overdue', updated_at = now()
+      WHERE tenant_id = ${this.tenantId} AND status = 'sent' AND date_due < ${today}
+    `;
+    return rows.count;
+  }
+
+  /**
+   * Fas 6: kandidater för påminnelse. Exakt WHERE-satsen från planens
+   * Idempotens #7 — NOT EXISTS gör urvalet självt idempotent (en redan
+   * påmind faktura väljs aldrig igen), och radlåset som tas per kandidat i
+   * services.ts är det som gör det säkert även vid en race mellan två
+   * samtidiga körningar.
+   */
+  async findReminderCandidates(today: string, db: Db = this.sql): Promise<InvoiceRow[]> {
+    return db<InvoiceRow[]>`
+      SELECT i.* FROM invoices i
+      WHERE i.tenant_id = ${this.tenantId}
+        AND i.date_due < ${today}
+        AND i.status IN ('sent', 'overdue')
+        AND i.invoice_type = 'invoice'
+        AND i.reminds_invoice_id IS NULL
+        AND NOT EXISTS (SELECT 1 FROM invoices r WHERE r.reminds_invoice_id = i.id)
+      ORDER BY i.id
+    `;
+  }
+
+  /** Originalet -> superseded, i samma transaktion som påminnelsen skapas. */
+  async supersede(tx: TransactionSql, originalId: number, byInvoiceId: number): Promise<void> {
+    await tx`
+      UPDATE invoices SET status = 'superseded', superseded_by_invoice_id = ${byInvoiceId}, updated_at = now()
+      WHERE id = ${originalId} AND tenant_id = ${this.tenantId}
+    `;
+  }
+
+  // postgres.js parsar DATE (liksom TIMESTAMP/TIMESTAMPTZ) till ett JS
+  // Date-objekt som standard — trots att InvoiceTemplateRow deklarerar
+  // next_generation_date som string (samma redan existerande mönster som
+  // InvoiceRow.date_due/date_issued). services.ts gör RIKTIG
+  // strängaritmetik på det fältet (addDays/advanceByInterval, "YYYY-MM-DD"
+  // .split("-")), så det måste vara en sträng härifrån — ::text tvingar
+  // Postgres att skicka det som text (OID 25) i stället för date (OID
+  // 1082), vilket kringgår parsningen utan att röra den delade DB-klienten
+  // (som andra, redan mergade kodvägar kan förlita sig på annorlunda).
+  /** Fas 6: mallar som är mogna att generera en ny faktura ur. Läsning, olåst. */
+  async findDueTemplates(today: string, db: Db = this.sql): Promise<InvoiceTemplateRow[]> {
+    return db<InvoiceTemplateRow[]>`
+      SELECT id, tenant_id, customer_id, interval, next_generation_date::text AS next_generation_date,
+             billing_day, is_active, template_data, created_at, updated_at
+      FROM invoice_templates
+      WHERE tenant_id = ${this.tenantId} AND is_active AND next_generation_date <= ${today}
+      ORDER BY id
+    `;
+  }
+
+  /** Radlås inför generering — samma "läs-modifiera-skriv med lås" som fakturanumret (database.md #24). */
+  async lockTemplate(tx: TransactionSql, id: number): Promise<InvoiceTemplateRow | undefined> {
+    const [row] = await tx<InvoiceTemplateRow[]>`
+      SELECT id, tenant_id, customer_id, interval, next_generation_date::text AS next_generation_date,
+             billing_day, is_active, template_data, created_at, updated_at
+      FROM invoice_templates WHERE id = ${id} AND tenant_id = ${this.tenantId} FOR UPDATE
+    `;
+    return row;
+  }
+
+  async advanceTemplateDate(tx: TransactionSql, id: number, nextDate: string): Promise<void> {
+    await tx`
+      UPDATE invoice_templates SET next_generation_date = ${nextDate}, updated_at = now()
+      WHERE id = ${id} AND tenant_id = ${this.tenantId}
+    `;
   }
 }
