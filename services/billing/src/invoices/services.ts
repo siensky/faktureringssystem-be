@@ -28,7 +28,7 @@ import type { Sql, TransactionSql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { CompanySettingsRepository } from "../company-settings/repository";
 import type { CompanySettingsRow } from "../company-settings/types";
-import { addDays, todayInStockholm } from "../domain/dates";
+import { addDays, advanceByInterval, todayInStockholm } from "../domain/dates";
 import { type LineAmounts, computeLine, sumTotals } from "../domain/vat";
 import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
 import { type InsertItemData, InvoiceRepository } from "./repository";
@@ -36,12 +36,22 @@ import type {
   CreateInvoiceInput,
   InvoiceRow,
   InvoiceStatus,
+  InvoiceTemplateRow,
   LineInputDto,
   UpdateInvoiceInput,
 } from "./types";
 
 const SERVICE_NAME = "billing";
+// Fas 6: audit_log.actor_user_id har FK mot users(id) — cronens syntetiska
+// RequestContext (userId: 0, samma mönster som S2S-kontrollerna) får ALDRIG
+// skrivas dit rakt av. Alla revisionsposter från automatiseringen sätter
+// actorUserId: null + actorService: "billing-cron" explicit i stället.
+const CRON_ACTOR_SERVICE = "billing-cron";
 const CREDITABLE: ReadonlySet<InvoiceStatus> = new Set(["sent", "overdue", "paid"]);
+// sent/overdue: en faktura kan hinna bli 'overdue' innan cronen når
+// påminnelsesteget samma körning, eller redan vara det sedan en tidigare
+// dag. Se findReminderCandidates för resten av urvalsvillkoret.
+const REMINDABLE: ReadonlySet<InvoiceStatus> = new Set(["sent", "overdue"]);
 const PAGE_DEFAULT = 100;
 const PAGE_MAX = 200;
 
@@ -69,6 +79,25 @@ const amountsOf = (it: InsertItemData): LineAmounts => ({
   lineVatOre: it.lineVatOre,
   lineInclVatOre: it.lineInclVatOre,
 });
+
+/**
+ * En momsfri rad om exakt 1 st à `unitPriceOre` — påminnelsens två rader
+ * (restskuld + avgift, domain.md #18). Restskulden bär redan moms från
+ * originalfakturan (att lägga på moms igen vore dubbelbeskattning), och en
+ * påminnelseavgift är ersättning för inkassokostnad, inte en momspliktig
+ * leverans.
+ */
+function zeroVatLine(position: number, description: string, unitPriceOre: number): InsertItemData {
+  return {
+    position,
+    description,
+    quantity: 1,
+    unit: "st",
+    unitPriceOre,
+    vatRate: 0,
+    ...computeLine({ quantity: 1, unitPriceOre, vatRate: 0 }),
+  };
+}
 
 /**
  * Följer superseded_by_invoice_id från startRow till kedjans slut (planens
@@ -463,6 +492,213 @@ export function createInvoiceService(sql: Sql) {
         paidOre,
         remainingOre: totalInclVatOre - paidOre,
       };
+    },
+
+    // ── Fas 6: automatisering ──────────────────────────────────────────
+
+    /** sent -> overdue. Returnerar antalet markerade fakturor. */
+    async markOverdue(ctx: RequestContext, today: string): Promise<number> {
+      return invRepo(ctx).markOverdueBulk(today);
+    },
+
+    /** Läsning inför loopen i automation/service.ts — själva skapandet låser per rad. */
+    async listReminderCandidates(ctx: RequestContext, today: string): Promise<InvoiceRow[]> {
+      return invRepo(ctx).findReminderCandidates(today);
+    },
+
+    /**
+     * Skapar en påminnelsefaktura för `originalId` och sätter originalet
+     * `superseded`, i EN transaktion (planens Domänmodell #3). Radlåset på
+     * originalet (lockById, FOR UPDATE) är det som gör "två körningar i
+     * rad ger ingen dubbelpåminnelse" sant även vid en race mellan två
+     * samtidiga körningar — inte bara NOT EXISTS-villkoret i urvalet, som
+     * bara skyddar mot sekventiella körningar.
+     *
+     * Beloppet är restskulden plus påminnelseavgiften (domain.md #18) — se
+     * zeroVatLine för varför båda raderna är momsfria.
+     *
+     * Publicerar MEDVETET inget invoice.sent — documents/e-postutskicket
+     * känner bara till document_type 'invoice'/'credit_note' (fas 4), och
+     * att återanvända invoice.sent skulle ge en påminnelse ett mejl som
+     * säger "Faktura" i stället för "Påminnelse". Att ge påminnelser en
+     * egen leveransväg (event, document_type, ämnesrad) är en egen,
+     * avgränsad ändring i documents (Python) och lämnas därför explicit
+     * utanför den här fasen — se PR-beskrivningen.
+     */
+    async createReminderInTx(
+      ctx: RequestContext,
+      tx: TransactionSql,
+      originalId: number,
+      today: string,
+    ): Promise<{ created: boolean; reminderInvoiceId?: number }> {
+      const repo = invRepo(ctx);
+
+      const original = await repo.lockById(tx, originalId);
+      if (!original) return { created: false };
+      // Försvar mot en race med en samtidig körning som redan hann före:
+      // återkontrollera ALLT urvalsvillkoret under låset, inte bara läs det.
+      if (original.invoice_type !== "invoice") return { created: false };
+      if (!REMINDABLE.has(original.status)) return { created: false };
+      if (original.reminds_invoice_id || original.superseded_by_invoice_id)
+        return { created: false };
+
+      const paidOre = await repo.paidOre(original.id, tx);
+      const remainingOre = Number(original.total_incl_vat_ore) - paidOre;
+      if (remainingOre <= 0) return { created: false }; // hann bli betald under tiden
+
+      const customer = await repo.findCustomerFull(original.customer_id, tx);
+      if (!customer) throw new BadRequest("Fakturans kund saknas");
+
+      // Kritisk sektion: nummerserien. settings ger reminder_fee_ore + snapshoten.
+      const { number, ocr, settings } = await allocateNumber(ctx, tx);
+
+      const items: InsertItemData[] = [
+        zeroVatLine(1, `Resterande belopp faktura ${original.invoice_number}`, remainingOre),
+        zeroVatLine(2, "Påminnelseavgift", Number(settings.reminder_fee_ore)),
+      ];
+      const totals = sumTotals(items.map(amountsOf));
+
+      const terms = customer.payment_terms_days ?? settings.payment_terms_days;
+      const dateDue = addDays(today, terms);
+
+      const reminder = await repo.insertInvoice(tx, {
+        customerId: original.customer_id,
+        invoiceNumber: number,
+        ocrNumber: ocr,
+        invoiceType: "reminder",
+        status: "sent",
+        dateIssued: today,
+        dateDue,
+        currency: original.currency,
+        totalExclVatOre: totals.totalExclVatOre,
+        totalVatOre: totals.totalVatOre,
+        totalInclVatOre: totals.totalInclVatOre,
+        remindsInvoiceId: original.id,
+      });
+      await repo.insertItems(tx, reminder.id, items);
+      await repo.supersede(tx, original.id, reminder.id);
+
+      const reminderRows = await repo.findItems(tx, reminder.id);
+      await repo.insertSnapshot(
+        tx,
+        reminder.id,
+        buildSnapshotPayload({
+          invoice: reminder,
+          items: reminderRows,
+          company: settings,
+          customer,
+        }),
+      );
+
+      await writeAuditLog(tx, {
+        tenantId: ctx.tenantId,
+        actorUserId: null,
+        actorService: CRON_ACTOR_SERVICE,
+        action: "invoice.reminder_created",
+        resourceType: "invoice",
+        resourceId: String(original.id),
+        correlationId: ctx.correlationId,
+        metadata: {
+          reminderInvoiceId: reminder.id,
+          reminderNumber: number,
+          remainingOre,
+          feeOre: Number(settings.reminder_fee_ore),
+        },
+      });
+
+      return { created: true, reminderInvoiceId: reminder.id };
+    },
+
+    /** Läsning inför loopen — mallar mogna att generera. */
+    async listDueTemplates(ctx: RequestContext, today: string): Promise<InvoiceTemplateRow[]> {
+      return invRepo(ctx).findDueTemplates(today);
+    },
+
+    /**
+     * Genererar en faktura ur en återkommande mall och rullar fram
+     * next_generation_date, i EN transaktion. Radlåset på mallraden
+     * (lockTemplate, FOR UPDATE) gör det säkert mot samma race som
+     * createReminderInTx skyddar mot.
+     *
+     * dateIssued blir mallens SCHEMALAGDA datum (next_generation_date), inte
+     * dagens datum — annars driver schemat iväg om cronen någon dag körs
+     * sent eller missar en körning. Publicerar invoice.sent: en genererad
+     * återkommande faktura ÄR en vanlig faktura, och dokumentet/mejlet ska
+     * se exakt likadant ut som om en admin tryckt skicka för hand.
+     */
+    async generateFromTemplateInTx(
+      ctx: RequestContext,
+      tx: TransactionSql,
+      templateId: number,
+      today: string,
+    ): Promise<{ created: boolean; invoiceId?: number }> {
+      const repo = invRepo(ctx);
+
+      const template = await repo.lockTemplate(tx, templateId);
+      if (!template) return { created: false };
+      if (!template.is_active || template.next_generation_date > today) return { created: false };
+
+      const customer = await repo.findCustomerFull(template.customer_id, tx);
+      if (!customer) throw new BadRequest("Mallens kund saknas");
+
+      const dateIssued = template.next_generation_date;
+      const terms =
+        customer.payment_terms_days ?? (await csRepo(ctx).find())?.payment_terms_days ?? 30;
+      const dateDue = addDays(dateIssued, terms);
+
+      const items = toItems(template.template_data.lines);
+      const totals = sumTotals(items.map(amountsOf));
+
+      const { number, ocr, settings } = await allocateNumber(ctx, tx);
+
+      const invoice = await repo.insertInvoice(tx, {
+        customerId: template.customer_id,
+        invoiceNumber: number,
+        ocrNumber: ocr,
+        invoiceType: "invoice",
+        status: "sent",
+        dateIssued,
+        dateDue,
+        currency: template.template_data.currency ?? "SEK",
+        totalExclVatOre: totals.totalExclVatOre,
+        totalVatOre: totals.totalVatOre,
+        totalInclVatOre: totals.totalInclVatOre,
+        parentTemplateId: template.id,
+      });
+      await repo.insertItems(tx, invoice.id, items);
+
+      const invoiceItems = await repo.findItems(tx, invoice.id);
+      await repo.insertSnapshot(
+        tx,
+        invoice.id,
+        buildSnapshotPayload({ invoice, items: invoiceItems, company: settings, customer }),
+      );
+
+      await writeEvent(tx, {
+        sourceService: SERVICE_NAME,
+        eventType: "invoice.sent",
+        tenantId: ctx.tenantId,
+        correlationId: ctx.correlationId,
+        payload: { invoiceId: invoice.id },
+      });
+      await writeAuditLog(tx, {
+        tenantId: ctx.tenantId,
+        actorUserId: null,
+        actorService: CRON_ACTOR_SERVICE,
+        action: "invoice.generated_recurring",
+        resourceType: "invoice",
+        resourceId: String(invoice.id),
+        correlationId: ctx.correlationId,
+        metadata: { templateId: template.id, invoiceNumber: number },
+      });
+
+      await repo.advanceTemplateDate(
+        tx,
+        template.id,
+        advanceByInterval(template.next_generation_date, template.interval),
+      );
+
+      return { created: true, invoiceId: invoice.id };
     },
   };
 }

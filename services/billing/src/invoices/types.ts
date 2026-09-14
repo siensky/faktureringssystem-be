@@ -1,3 +1,4 @@
+import type { RecurrenceInterval } from "../domain/dates";
 import type { VatRate } from "../domain/vat";
 
 export type InvoiceType = "invoice" | "credit_note" | "reminder";
@@ -75,4 +76,27 @@ export interface UpdateInvoiceInput {
   dateDue?: string;
   currency?: string;
   lines?: LineInputDto[];
+}
+
+// Fas 6: innehållet i invoice_templates.template_data (JSONB). Speglar
+// CreateInvoiceInput minus datum — de räknas fram FÄRSKT vid varje
+// generering utifrån next_generation_date och kundens betalningsvillkor,
+// inte frusna i mallen (databasen har ingen egen skapare/API för mallar
+// ännu, se PR-beskrivningen).
+export interface TemplateData {
+  customerId: number;
+  currency?: string;
+  lines: LineInputDto[];
+}
+
+export interface InvoiceTemplateRow {
+  id: number;
+  tenant_id: number;
+  customer_id: number;
+  interval: RecurrenceInterval;
+  next_generation_date: string;
+  is_active: boolean;
+  template_data: TemplateData;
+  created_at: Date;
+  updated_at: Date;
 }

@@ -9,9 +9,13 @@ import {
   createRequireService,
   createRequireUser,
   publishConfirmed,
+  startDailyTimer,
   startOutboxPublisher,
   startService,
 } from "@faktura/shared";
+import { registerAutomationRoutes } from "./automation/routes";
+import { createAutomationRunner } from "./automation/runner";
+import { createAutomationService } from "./automation/service";
 import { registerCompanySettingsRoutes } from "./company-settings/routes";
 import { createCompanySettingsService } from "./company-settings/services";
 import { SERVICE_NAME, config } from "./config";
@@ -31,10 +35,17 @@ const logger = createLogger(SERVICE_NAME);
 /**
  * Finns tenanten och är den aktiv? auth äger tabellen (architecture.md #2)
  * — billing läser den direkt här som en ÖVERGÅNGSLÖSNING med känt slutdatum:
- * fas 6 inför den lokala läsmodellen company_settings.tenant_status (hålls
- * uppdaterad av tenant.suspended / tenant.reactivated, planens Domänmodell
- * #8, #10) och fas 7 sätter separata Postgres-roller med GRANT bara på egna
- * tabeller — då SLUTAR den här queryn fungera och måste vara borta.
+ * fas 7 sätter separata Postgres-roller med GRANT bara på egna tabeller —
+ * då SLUTAR den här queryn fungera och måste vara borta.
+ *
+ * Fas 6 övervägde en lokal läsmodell (company_settings.tenant_status,
+ * redan en kolumn sedan fas 3) hållen uppdaterad av tenant.suspended /
+ * tenant.reactivated — men INGEN sådan händelse publiceras någonstans i
+ * systemet ännu (ingen avstängningsendpoint finns), så en konsument för
+ * den skulle bara vara död kod som råkar se rätt ut i ett test som sätter
+ * kolumnen direkt via SQL. automation/service.ts (fas 6) läser därför
+ * samma sanning direkt här, av samma skäl — se
+ * company-settings/repository.ts:s listActiveTenantIds.
  */
 async function isTenantActive(tenantId: number): Promise<boolean> {
   const [row] = await sql<{ status: string }[]>`
@@ -83,6 +94,27 @@ startService({
     const invoiceService = createInvoiceService(sql);
     registerInvoiceRoutes(app, invoiceService, sql, { userChain, requireService });
 
+    // Fas 6: dagligt automatiseringsjobb (overdue, påminnelser, återkommande
+    // fakturor, städning) kl. 03:00 Europe/Stockholm, plus en skyddad
+    // endpoint för manuell körning. Redis-låset i runner.ts delas av båda
+    // vägarna in.
+    const automationService = createAutomationService(sql, invoiceService, logger);
+    const automationRunner = createAutomationRunner({
+      redis: ctx.redis,
+      automation: automationService,
+      logger,
+    });
+    registerAutomationRoutes(app, automationRunner, { requireService });
+    const automationTimer = startDailyTimer({
+      timeZone: "Europe/Stockholm",
+      hour: 3,
+      jobName: "billing-automation",
+      logger,
+      run: async () => {
+        await automationRunner.runOnce();
+      },
+    });
+
     const publisher = startOutboxPublisher({
       sql,
       sourceService: SERVICE_NAME,
@@ -126,6 +158,7 @@ startService({
     });
 
     app.addHook("onClose", async () => {
+      automationTimer.stop();
       publisher.stop();
       await deliveryConsumer.stop();
       await paymentConsumer.stop();

@@ -15,3 +15,27 @@ export function createRedisClient(url: string): Redis {
     maxRetriesPerRequest: 3,
   });
 }
+
+/**
+ * Cron-lås (fas 6, planens Idempotens #7): en ren OPTIMERING som slipper
+ * dubbelarbete när ett dagligt jobb triggas två gånger nära i tid (t.ex.
+ * schemaläggaren OCH ett manuellt anrop mot drift-endpointen). Ger INTE
+ * "exakt en gång" — ett lås som löper ut mitt i jobbet ger fortfarande två
+ * samtidiga körningar. Den riktiga garantin ligger i cronjobbets eget
+ * urvalsvillkor och radlåsen det tar i databasen; ett tappat/kapat lås gör
+ * jobbet dyrare, aldrig fel.
+ *
+ * SET NX — bara en klient kan sätta nyckeln medan den redan finns. Ingen
+ * ägar-token/Lua-radering: en förlorad race om att RELEASE:a någon annans
+ * (nya) lås efter att vårt eget TTL redan gått ut är exakt den accepterade
+ * risken ovan, inte en korrekthetsbugg.
+ */
+export async function acquireLock(redis: Redis, key: string, ttlSeconds: number): Promise<boolean> {
+  const result = await redis.set(key, "1", "EX", ttlSeconds, "NX");
+  return result === "OK";
+}
+
+/** Släpper låset tidigt så en lyckad körning inte blockerar nästa i onödan. */
+export async function releaseLock(redis: Redis, key: string): Promise<void> {
+  await redis.del(key);
+}

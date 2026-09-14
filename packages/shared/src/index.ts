@@ -23,7 +23,8 @@ export {
   type OutboxPublisher,
 } from "./outbox";
 export { startSystemPing, PING_EXCHANGE, type PingState, type PingMessage } from "./ping";
-export { createRedisClient } from "./redis";
+export { createRedisClient, acquireLock, releaseLock } from "./redis";
+export { nextDailyRunAt, startDailyTimer, type DailyTimer, type DailyTimerOptions } from "./cron";
 export {
   startService,
   type StartServiceOptions,

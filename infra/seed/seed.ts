@@ -91,6 +91,18 @@ async function main(): Promise<void> {
         .filter(Boolean),
       description: "drift-konto: BgMax-filimport och driftvyn för okänt bankgiro (fas 5)",
     },
+    {
+      clientId: required("BILLING_OPS_CLIENT_ID"),
+      clientSecret: required("BILLING_OPS_CLIENT_SECRET"),
+      // Ett DRIFT-konto, som PAYMENTS_OPS_CLIENT_ID ovan: POST
+      // /internal/automation/run (fas 6, manuell körning av det dagliga
+      // jobbet) har ingen körande tjänst som naturligt äger den — bara en
+      // operatör som vill trigga/felsöka jobbet utanför 03:00-schemat.
+      scopes: (process.env.BILLING_OPS_CLIENT_SCOPES ?? "billing:ops:run")
+        .split(/\s+/)
+        .filter(Boolean),
+      description: "drift-konto: manuell körning av det dagliga automatiseringsjobbet (fas 6)",
+    },
   ];
 
   const sql = postgres(databaseUrl, { max: 1 });

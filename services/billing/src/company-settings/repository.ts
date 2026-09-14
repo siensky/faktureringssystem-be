@@ -98,3 +98,28 @@ export async function findTenantIdByBankgiro(
   `;
   return row?.tenant_id;
 }
+
+/**
+ * Fas 6: tenants automation/service.ts itererar över. Samma avvikelse-
+ * motivering som findTenantIdByBankgiro ovan — cronen känner per
+ * definition inte tenanten i förväg, så den kan inte gå via
+ * CompanySettingsRepository-instansen.
+ *
+ * Läser auth:s tenants.status DIREKT, samma ÖVERGÅNGSLÖSNING som
+ * services/billing/src/index.ts:s isTenantActive() och av samma skäl
+ * (architecture.md #2 bryts medvetet här, med känt slutdatum fas 7). Inte
+ * company_settings.tenant_status: den kolumnen finns sedan fas 3 men
+ * hålls INTE uppdaterad av något ännu — det finns i hela systemet ingen
+ * `tenant.suspended`/`tenant.reactivated`-producent (ingen avstängnings-
+ * endpoint existerar), så en lokal läsmodell byggd på dem vore permanent
+ * fel i produktion (alltid 'active') medan den bara råkar se rätt ut i
+ * ett test som sätter kolumnen direkt via SQL. Att läsa sanningen direkt
+ * är den enda korrekta vägen tills den riktiga händelsekedjan finns — se
+ * PR-beskrivningen.
+ */
+export async function listActiveTenantIds(sql: Sql): Promise<number[]> {
+  const rows = await sql<{ id: number }[]>`
+    SELECT id FROM tenants WHERE status = 'active' ORDER BY id
+  `;
+  return rows.map((r) => r.id);
+}

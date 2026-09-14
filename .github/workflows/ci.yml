@@ -165,6 +165,9 @@ jobs:
           PAYMENTS_OPS_CLIENT_ID=ops-payments
           PAYMENTS_OPS_CLIENT_SECRET=ci_payments_ops_client_secret_not_a_real_00
           PAYMENTS_OPS_CLIENT_SCOPES=payments:ops:import payments:ops:read
+          BILLING_OPS_CLIENT_ID=ops-billing
+          BILLING_OPS_CLIENT_SECRET=ci_billing_ops_client_secret_not_a_real_secret_0
+          BILLING_OPS_CLIENT_SCOPES=billing:ops:run
           ENVEOF
 
       - name: Bygg alla images
