@@ -10,6 +10,7 @@ export {
   publishJson,
   publishConfirmed,
   consumeJson,
+  checkQueueDepth,
   type RabbitConnection,
   type JsonMessageHandler,
 } from "./rabbitmq";

@@ -33,10 +33,13 @@ Felhantering:
                                   överlever på så vis en omstart av
                                   documents, till skillnad från
                                   redelivered. Efter MAX_ATTEMPTS ges
-                                  meddelandet upp (ack + larm) så en
-                                  förgiftad rad inte loopar hett. En riktig
-                                  dead-letter-kö med larm läggs till i
-                                  fas 7.
+                                  meddelandet upp: NACK (requeue=False),
+                                  inte ack, så det landar i events.dlq
+                                  (infra/rabbitmq/init.sh) i stället för
+                                  att bara försvinna tyst — samma mönster
+                                  som billings TS-konsumenter redan
+                                  använde. GET /internal/ops/alerts i
+                                  billing (fas 7) visar ködjupet.
 """
 
 from __future__ import annotations
@@ -163,12 +166,20 @@ class EventConsumer:
         next_attempts = attempts + 1
         if next_attempts >= MAX_ATTEMPTS:
             self._logger.error(
-                "consumer: transient fel, gav upp efter maxantal försök (se fas 7 DLQ)",
+                "consumer: transient fel, gav upp efter maxantal försök (nackas till events.dlq)",
                 attempts=next_attempts,
                 error_type=type(error).__name__,
                 error=str(error),
             )
-            await message.ack()
+            # nack (INTE ack) med requeue=False: det är DET som faktiskt
+            # dead-letter:ar meddelandet till events.dlx/events.dlq (kön
+            # deklarerades med x-dead-letter-exchange redan i
+            # infra/rabbitmq/init.sh). Ett ack hade bara kastat bort det
+            # tyst utan att en operatör någonsin kunnat se det (fas 7,
+            # kodgranskning PR #7) — exakt samma mönster som billings två
+            # TS-konsumenter (deliveries/consumer.ts, payments/consumer.ts)
+            # redan gör.
+            await message.nack(requeue=False)
             return
         self._logger.warning(
             "consumer: transient fel, försöker igen",

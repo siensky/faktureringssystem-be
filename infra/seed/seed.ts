@@ -103,6 +103,18 @@ async function main(): Promise<void> {
         .filter(Boolean),
       description: "drift-konto: manuell körning av det dagliga automatiseringsjobbet (fas 6)",
     },
+    {
+      clientId: required("BILLING_CLIENT_ID"),
+      clientSecret: required("BILLING_CLIENT_SECRET"),
+      // Minsta möjliga scope (architecture.md #18): GET /internal/ops/alerts
+      // anropar bara payments unknown-bankgiro-driftvy, S2S i stället för en
+      // direkt DB-läsning över tjänstegränsen (fas 7).
+      scopes: (process.env.BILLING_CLIENT_SCOPES ?? "payments:ops:read")
+        .split(/\s+/)
+        .filter(Boolean),
+      description:
+        "billing-tjänsten: läser payments unknown-bankgiro för GET /internal/ops/alerts (fas 7)",
+    },
   ];
 
   const sql = postgres(databaseUrl, { max: 1 });

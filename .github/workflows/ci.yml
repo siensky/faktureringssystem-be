@@ -109,6 +109,10 @@ jobs:
           DB_NAME=${{ env.DB_NAME }}
           DB_EXTERNAL_PORT=5434
           DATABASE_URL=postgresql://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@db:5432/${{ env.DB_NAME }}
+          AUTH_DB_PASSWORD=ci_auth_db_password_not_a_real_secret_000000
+          BILLING_DB_PASSWORD=ci_billing_db_password_not_a_real_secret_00
+          PAYMENTS_DB_PASSWORD=ci_payments_db_password_not_a_real_secret_0
+          DOCUMENTS_DB_PASSWORD=ci_documents_db_password_not_a_real_secret
           AUTH_PORT=4001
           BILLING_PORT=4002
           PAYMENTS_PORT=4003
@@ -168,6 +172,9 @@ jobs:
           BILLING_OPS_CLIENT_ID=ops-billing
           BILLING_OPS_CLIENT_SECRET=ci_billing_ops_client_secret_not_a_real_secret_0
           BILLING_OPS_CLIENT_SCOPES=billing:ops:run
+          BILLING_CLIENT_ID=svc-billing
+          BILLING_CLIENT_SECRET=ci_billing_client_secret_not_a_real_secret_000
+          BILLING_CLIENT_SCOPES=payments:ops:read
           ENVEOF
 
       - name: Bygg alla images
@@ -221,6 +228,10 @@ jobs:
           PAYMENTS_URL: http://localhost:4003
           MAILPIT_URL: http://localhost:8025
           E2E_DATABASE_URL: postgresql://${{ env.DB_USER }}:${{ env.DB_PASSWORD }}@localhost:5434/${{ env.DB_NAME }}
+          # Fas 7: kopplar upp som payments EGEN, restriktiva Postgres-roll
+          # (inte superusern ovan) för att bevisa att GRANT:en faktiskt
+          # håller — se e2e/db-roles.test.ts.
+          E2E_PAYMENTS_DATABASE_URL: postgresql://payments:ci_payments_db_password_not_a_real_secret_0@localhost:5434/${{ env.DB_NAME }}
           E2E_RABBITMQ_URL: amqp://ci_admin:ci_password_not_secret@localhost:5672
           E2E_PNR_HMAC_KEY: 000000000000000000000000000000000000000000000000000000000000abcd
           E2E_PNR_ENCRYPTION_KEY: "0000000000000000000000000000000000000000000000000000000000000000"

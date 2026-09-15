@@ -13,6 +13,8 @@ import {
   startOutboxPublisher,
   startService,
 } from "@faktura/shared";
+import { registerAlertsRoutes } from "./alerts/routes";
+import { createAlertsService } from "./alerts/service";
 import { registerAutomationRoutes } from "./automation/routes";
 import { createAutomationRunner } from "./automation/runner";
 import { createAutomationService } from "./automation/service";
@@ -114,6 +116,16 @@ startService({
         await automationRunner.runOnce();
       },
     });
+
+    // Fas 7: GET /internal/ops/alerts — dead-letter-kö, publiceringsnivåns
+    // dead-letter (event_outbox) och payments obetalbara transaktioner utan
+    // tenant, allt i ett svar. Se alerts/service.ts.
+    const alertsService = createAlertsService({
+      sql,
+      rabbitConnection: ctx.rabbit.connection,
+      redis: ctx.redis,
+    });
+    registerAlertsRoutes(app, alertsService, { requireService });
 
     const publisher = startOutboxPublisher({
       sql,
