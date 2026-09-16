@@ -332,6 +332,7 @@ describe.skipIf(!RUN)("fas 9 e2e — kundportal", () => {
     const c2SentId = await sentInvoice(admin, c2);
 
     const otherAdmin = await newAdmin("isoOther");
+    await fillCompanySettings(otherAdmin);
     const otherCustomerId = await makeCustomer(otherAdmin);
     const otherSentId = await sentInvoice(otherAdmin, otherCustomerId);
 
