@@ -4,7 +4,7 @@
 
 export type UserRole = "admin" | "customer";
 export type AuthMethod = "password" | "bankid";
-export type TokenType = "refresh" | "email_verification" | "password_reset";
+export type TokenType = "refresh" | "email_verification" | "password_reset" | "customer_invite";
 export type TenantStatus = "active" | "suspended";
 
 export interface UserRow {
@@ -15,6 +15,7 @@ export interface UserRow {
   email: string | null;
   password_hash: string | null;
   pnr_hash: string | null;
+  customer_id: number | null;
   email_verified_at: Date | null;
 }
 
@@ -44,5 +45,17 @@ export interface RegisterInput {
 
 export interface LoginInput {
   email: string;
+  password: string;
+}
+
+/** POST /auth/customer-invites (admin, i auth-tjänsten). */
+export interface CreateCustomerInviteInput {
+  customerId: number;
+  email: string;
+}
+
+/** POST /auth/accept-customer-invite (publik, engångslänk). */
+export interface AcceptCustomerInviteInput {
+  token: string;
   password: string;
 }

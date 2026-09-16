@@ -12,6 +12,10 @@ function loadConfig(env: Record<string, string>): { code: number; stderr: string
     JWT_SERVICE_SECRET: "s",
     AUTH_TOKEN_PEPPER: "p",
     PNR_HMAC_KEY: "h",
+    BILLING_BASE_URL: "http://billing",
+    AUTH_BASE_URL: "http://auth",
+    AUTH_CLIENT_ID: "svc-auth",
+    AUTH_CLIENT_SECRET: "c",
   };
   const proc = Bun.spawnSync(["bun", "-e", "import('./src/config.ts')"], {
     cwd: new URL("..", import.meta.url).pathname,

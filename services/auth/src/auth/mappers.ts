@@ -18,6 +18,7 @@ export function toCurrentUserView(row: {
   tenant_id: number;
   role: UserRole;
   email: string | null;
+  customer_id: number | null;
   tenant_name: string;
 }): CurrentUserDto {
   return {
@@ -26,6 +27,7 @@ export function toCurrentUserView(row: {
     tenantName: row.tenant_name,
     email: row.email,
     role: row.role,
+    customerId: row.customer_id,
   };
 }
 

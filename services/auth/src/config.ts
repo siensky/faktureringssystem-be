@@ -13,6 +13,21 @@ const required = loadEnv([
   "JWT_SERVICE_SECRET",
   "AUTH_TOKEN_PEPPER",
   "PNR_HMAC_KEY",
+  // Fas 9: POST /auth/customer-invites validerar customerId mot billing
+  // S2S (GET /internal/customers/:id, scope billing:customer:read) i
+  // stället för att lita blint på en admins body — samma mönster som
+  // payments BILLING_BASE_URL/PAYMENTS_CLIENT_ID (services/payments/src/
+  // config.ts). Ingen S2S-write (architecture.md #20): auth skriver bara i
+  // sina egna tabeller, den här läsningen är bara en existens-/tenant-koll.
+  // AUTH_BASE_URL pekar på auth SJÄLV — den behöver ett eget tjänste-token
+  // (POST /auth/token) precis som vilken annan klient som helst för att
+  // hålla scope-beviljandet i service_clients som den enda sanningen
+  // (i stället för att auth genvägssignerar sitt eget token förbi den
+  // kontrollen).
+  "BILLING_BASE_URL",
+  "AUTH_BASE_URL",
+  "AUTH_CLIENT_ID",
+  "AUTH_CLIENT_SECRET",
 ] as const);
 
 const optional = loadEnvWithDefaults({
@@ -23,9 +38,17 @@ const optional = loadEnvWithDefaults({
   REFRESH_TTL_DAYS: "30",
   EMAIL_VERIFICATION_TTL_HOURS: "24",
   PASSWORD_RESET_TTL_HOURS: "1",
+  CUSTOMER_INVITE_TTL_DAYS: "7",
   AUTH_STRICT_RATE_LIMIT_MAX: "10",
   BANKID_PROVIDER: "mock",
+  // Minsta möjliga scope (architecture.md #18): auth anropar bara
+  // GET /internal/customers/:id.
+  AUTH_CLIENT_SCOPES: "billing:customer:read",
 });
+
+function trimTrailingSlash(url: string): string {
+  return url.replace(/\/+$/, "");
+}
 
 export const config = {
   port: parseIntEnv("PORT", optional.PORT),
@@ -47,6 +70,8 @@ export const config = {
     parseIntEnv("EMAIL_VERIFICATION_TTL_HOURS", optional.EMAIL_VERIFICATION_TTL_HOURS) * 60 * 60,
   passwordResetTtlSeconds:
     parseIntEnv("PASSWORD_RESET_TTL_HOURS", optional.PASSWORD_RESET_TTL_HOURS) * 60 * 60,
+  customerInviteTtlSeconds:
+    parseIntEnv("CUSTOMER_INVITE_TTL_DAYS", optional.CUSTOMER_INVITE_TTL_DAYS) * 24 * 60 * 60,
   // Hårt per-IP-tak på känsliga endpoints (login, register, reset). Lågt
   // som standard; höjs i test/CI där hela sviten kör från samma IP.
   strictRateLimitMax: parseIntEnv(
@@ -54,6 +79,11 @@ export const config = {
     optional.AUTH_STRICT_RATE_LIMIT_MAX,
   ),
   bankIdProvider: optional.BANKID_PROVIDER,
+  billingBaseUrl: trimTrailingSlash(required.BILLING_BASE_URL),
+  authBaseUrl: trimTrailingSlash(required.AUTH_BASE_URL),
+  authClientId: required.AUTH_CLIENT_ID,
+  authClientSecret: required.AUTH_CLIENT_SECRET,
+  authClientScopes: optional.AUTH_CLIENT_SCOPES.split(/\s+/).filter(Boolean),
 } as const;
 
 // BankID-mocken tar personnumret ur request-bodyn och returnerar det som

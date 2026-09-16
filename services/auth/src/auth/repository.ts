@@ -16,7 +16,7 @@ export function createAuthRepository(sql: Sql) {
     /** Korsläsning utan tenant-filter — se filhuvudet. */
     async findUserByEmailForLogin(email: string): Promise<UserRow | undefined> {
       const [row] = await sql<UserRow[]>`
-        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, email_verified_at
+        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, customer_id, email_verified_at
         FROM users
         WHERE lower(email) = lower(${email}) AND auth_method = 'password'
         LIMIT 1
@@ -26,7 +26,7 @@ export function createAuthRepository(sql: Sql) {
 
     async findUserByEmailAnyMethod(email: string): Promise<UserRow | undefined> {
       const [row] = await sql<UserRow[]>`
-        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, email_verified_at
+        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, customer_id, email_verified_at
         FROM users WHERE lower(email) = lower(${email}) LIMIT 1
       `;
       return row;
@@ -34,7 +34,7 @@ export function createAuthRepository(sql: Sql) {
 
     async findUserById(id: number): Promise<UserRow | undefined> {
       const [row] = await sql<UserRow[]>`
-        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, email_verified_at
+        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, customer_id, email_verified_at
         FROM users WHERE id = ${id} LIMIT 1
       `;
       return row;
@@ -45,7 +45,14 @@ export function createAuthRepository(sql: Sql) {
       id: number,
       tenantId: number,
     ): Promise<
-      | { id: number; tenant_id: number; role: UserRole; email: string | null; tenant_name: string }
+      | {
+          id: number;
+          tenant_id: number;
+          role: UserRole;
+          email: string | null;
+          customer_id: number | null;
+          tenant_name: string;
+        }
       | undefined
     > {
       const [row] = await sql<
@@ -54,14 +61,43 @@ export function createAuthRepository(sql: Sql) {
           tenant_id: number;
           role: UserRole;
           email: string | null;
+          customer_id: number | null;
           tenant_name: string;
         }[]
       >`
-        SELECT u.id, u.tenant_id, u.role, u.email, t.name AS tenant_name
+        SELECT u.id, u.tenant_id, u.role, u.email, u.customer_id, t.name AS tenant_name
         FROM users u JOIN tenants t ON t.id = u.tenant_id
         WHERE u.id = ${id} AND u.tenant_id = ${tenantId}
         LIMIT 1
       `;
+      return row;
+    },
+
+    /** Finns redan en portal-inloggning för den här kunden? (users_customer_id_unique). */
+    async findUserByCustomerId(customerId: number): Promise<UserRow | undefined> {
+      const [row] = await sql<UserRow[]>`
+        SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, customer_id, email_verified_at
+        FROM users WHERE customer_id = ${customerId} LIMIT 1
+      `;
+      return row;
+    },
+
+    /**
+     * Skapar kundportal-inloggningen (role='customer'). passwordHash är en
+     * slumpmässig, okänd placeholder — kunden har inget lösenord förrän
+     * accept-customer-invite sätter ett riktigt (users_auth_shape kräver
+     * NOT NULL för auth_method='password', se services.ts).
+     */
+    async insertCustomerInviteUser(
+      tx: TransactionSql,
+      input: { tenantId: number; customerId: number; email: string; passwordHash: string },
+    ): Promise<{ id: number }> {
+      const [row] = await tx<{ id: number }[]>`
+        INSERT INTO users (tenant_id, role, auth_method, email, password_hash, customer_id)
+        VALUES (${input.tenantId}, 'customer', 'password', ${input.email}, ${input.passwordHash}, ${input.customerId})
+        RETURNING id
+      `;
+      if (!row) throw new Error("INSERT users (customer_invite) returnerade ingen rad");
       return row;
     },
 

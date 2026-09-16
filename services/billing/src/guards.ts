@@ -11,6 +11,16 @@ export async function requireAdmin(request: FastifyRequest, _reply: FastifyReply
   }
 }
 
+/** Körs EFTER requireUser. /portal/* är bara för kundportal-roller, inte admins. */
+export async function requireCustomer(
+  request: FastifyRequest,
+  _reply: FastifyReply,
+): Promise<void> {
+  if (contextOf(request).role !== "customer") {
+    throw new Forbidden("Endast kundportalen har åtkomst till den här resursen");
+  }
+}
+
 /** X-Correlation-Id från headern om satt, annars undefined (servicen genererar). */
 export function correlationIdOf(request: FastifyRequest): string | undefined {
   const raw = request.headers["x-correlation-id"];

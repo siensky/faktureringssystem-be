@@ -23,6 +23,10 @@ const required = loadEnv([
   // PAYMENTS_CLIENT_ID (services/payments/src/config.ts).
   "AUTH_BASE_URL",
   "PAYMENTS_BASE_URL",
+  // Fas 9: GET /portal/invoices/:id/pdf anropar documents EGNA
+  // /internal/documents/:invoiceId/url (signerad S3-URL) S2S, samma
+  // BILLING_CLIENT_* identitet som ovan men med ett extra scope.
+  "DOCUMENTS_BASE_URL",
   "BILLING_CLIENT_ID",
   "BILLING_CLIENT_SECRET",
 ] as const);
@@ -31,9 +35,9 @@ const optional = loadEnvWithDefaults({
   PORT: "4002",
   CORS_ORIGIN: "http://localhost:5173",
   NODE_ENV: "development",
-  // Minsta möjliga scope (architecture.md #18): billing anropar bara
-  // payments unknown-bankgiro-drifts vy.
-  BILLING_CLIENT_SCOPES: "payments:ops:read",
+  // Minsta möjliga scope (architecture.md #18): payments unknown-bankgiro-
+  // driftvyn (fas 7) och documents PDF-URL (fas 9).
+  BILLING_CLIENT_SCOPES: "payments:ops:read documents:pdf:read",
 });
 
 function trimTrailingSlash(url: string): string {
@@ -52,6 +56,7 @@ export const config = {
   pnrHmacKey: required.PNR_HMAC_KEY,
   authBaseUrl: trimTrailingSlash(required.AUTH_BASE_URL),
   paymentsBaseUrl: trimTrailingSlash(required.PAYMENTS_BASE_URL),
+  documentsBaseUrl: trimTrailingSlash(required.DOCUMENTS_BASE_URL),
   billingClientId: required.BILLING_CLIENT_ID,
   billingClientSecret: required.BILLING_CLIENT_SECRET,
   billingClientScopes: optional.BILLING_CLIENT_SCOPES.split(/\s+/).filter(Boolean),

@@ -36,6 +36,7 @@ export function createRequireUser(userSecret: string) {
       userId: claims.userId,
       tenantId: claims.tenantId,
       role: claims.role,
+      ...(claims.customerId !== undefined ? { customerId: claims.customerId } : {}),
       correlationId,
     };
   };

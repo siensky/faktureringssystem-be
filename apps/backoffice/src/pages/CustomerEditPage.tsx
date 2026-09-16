@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import * as customersApi from "../api/customers";
+import * as portalInvitesApi from "../api/portal-invites";
 
 export function CustomerEditPage() {
   const { id } = useParams<{ id: string }>();
@@ -60,6 +61,20 @@ export function CustomerEditPage() {
       paymentTermsDays: form.paymentTermsDays ? Number(form.paymentTermsDays) : null,
     });
   }
+
+  const [inviteError, setInviteError] = useState<string | null>(null);
+  const [inviteLink, setInviteLink] = useState<string | null>(null);
+  const [inviteSent, setInviteSent] = useState(false);
+  const inviteMutation = useMutation({
+    mutationFn: () => portalInvitesApi.inviteCustomer(customerId, form.email),
+    onSuccess: async () => {
+      setInviteSent(true);
+      // Best-effort — se portal-invites.ts. null (t.ex. i produktion) betyder
+      // bara att länken gick med riktig e-post i stället för att visas här.
+      setInviteLink(await portalInvitesApi.devInviteLink(form.email));
+    },
+    onError: (err) => setInviteError(err instanceof Error ? err.message : "Något gick fel"),
+  });
 
   if (isLoading || !customer) {
     return <p className="text-slate-500">Laddar…</p>;
@@ -155,6 +170,39 @@ export function CustomerEditPage() {
           </button>
         </div>
       </form>
+
+      <div className="mt-6 max-w-2xl rounded-lg border border-slate-200 bg-white p-6">
+        <h2 className="mb-2 text-sm font-semibold">Kundportal</h2>
+        <p className="mb-3 text-sm text-slate-500">
+          Skickar en engångslänk till {form.email} där kunden sätter ett lösenord. Har kunden redan
+          ett konto visas ett felmeddelande om det nedan — glömt lösenord löser kunden själv i
+          portalen.
+        </p>
+        {inviteError && (
+          <p className="mb-3 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{inviteError}</p>
+        )}
+        {inviteSent ? (
+          inviteLink ? (
+            <p className="break-all rounded bg-slate-50 px-3 py-2 text-sm">
+              <span className="text-slate-500">Inbjudningslänk (dev): </span>
+              <a href={inviteLink} className="underline">
+                {inviteLink}
+              </a>
+            </p>
+          ) : (
+            <p className="text-sm text-slate-500">Inbjudan skickad.</p>
+          )
+        ) : (
+          <button
+            type="button"
+            onClick={() => inviteMutation.mutate()}
+            disabled={inviteMutation.isPending}
+            className="rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+          >
+            {inviteMutation.isPending ? "Bjuder in…" : "Bjud in till kundportalen"}
+          </button>
+        )}
+      </div>
     </div>
   );
 }

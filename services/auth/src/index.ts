@@ -17,6 +17,7 @@ import { registerBankIdRoutes } from "./bankid/routes";
 import { createBankIdService } from "./bankid/services";
 import { SERVICE_NAME, config } from "./config";
 import { sql } from "./db";
+import { requireAdmin } from "./guards";
 import { registerInternalFixtures } from "./internal";
 import { registerM2mRoutes } from "./m2m/routes";
 import { createM2mService } from "./m2m/services";
@@ -66,6 +67,7 @@ startService({
       devEndpointsEnabled: config.devEndpointsEnabled,
       strictRateLimitMax: config.strictRateLimitMax,
       requireUser,
+      requireAdmin,
     });
 
     const m2mService = createM2mService({ sql, config });

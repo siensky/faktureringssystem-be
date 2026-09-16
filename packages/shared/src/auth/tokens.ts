@@ -19,6 +19,9 @@ export interface AccessTokenClaims {
   userId: number;
   tenantId: number;
   role: "admin" | "customer";
+  /** Bara satt (och obligatoriskt) för role: "customer" — se domain.md #33,
+   *  Åtkomstkontroll i två lager: rätt tenant OCH rätt kund. */
+  customerId?: number;
 }
 
 function key(secret: string): Uint8Array {
@@ -29,6 +32,7 @@ export async function signAccessToken(claims: AccessTokenClaims, secret: string)
   return new SignJWT({
     tenantId: claims.tenantId,
     role: claims.role,
+    ...(claims.customerId !== undefined ? { customerId: claims.customerId } : {}),
     token_type: USER_TOKEN.type,
   })
     .setProtectedHeader({ alg: "HS256" })
@@ -71,6 +75,14 @@ export async function verifyAccessToken(token: string, secret: string): Promise<
     (role !== "admin" && role !== "customer")
   ) {
     throw new Unauthorized("Token saknar obligatoriska claims");
+  }
+
+  if (role === "customer") {
+    const customerId = Number(payload.customerId);
+    if (!Number.isInteger(customerId)) {
+      throw new Unauthorized("Token saknar obligatoriska claims");
+    }
+    return { userId, tenantId, role, customerId };
   }
 
   return { userId, tenantId, role };
