@@ -174,7 +174,11 @@ jobs:
           BILLING_OPS_CLIENT_SCOPES=billing:ops:run
           BILLING_CLIENT_ID=svc-billing
           BILLING_CLIENT_SECRET=ci_billing_client_secret_not_a_real_secret_000
-          BILLING_CLIENT_SCOPES=payments:ops:read
+          BILLING_CLIENT_SCOPES=payments:ops:read documents:pdf:read
+          AUTH_CLIENT_ID=svc-auth
+          AUTH_CLIENT_SECRET=ci_auth_client_secret_not_a_real_secret_000000
+          AUTH_CLIENT_SCOPES=billing:customer:read
+          CUSTOMER_INVITE_TTL_DAYS=7
           ENVEOF
 
       - name: Bygg alla images
