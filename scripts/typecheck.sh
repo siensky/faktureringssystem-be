@@ -7,7 +7,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 status=0
-for dir in packages/shared packages/contracts services/auth services/billing services/payments; do
+for dir in packages/shared packages/contracts services/auth services/billing services/payments apps/backoffice; do
   if [ -f "$dir/tsconfig.json" ]; then
     echo "→ typecheck: $dir"
     if ! bunx tsc --noEmit -p "$dir"; then

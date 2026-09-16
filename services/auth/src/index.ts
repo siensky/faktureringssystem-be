@@ -65,6 +65,7 @@ startService({
     registerAuthRoutes(app, authService, {
       devEndpointsEnabled: config.devEndpointsEnabled,
       strictRateLimitMax: config.strictRateLimitMax,
+      requireUser,
     });
 
     const m2mService = createM2mService({ sql, config });
@@ -80,7 +81,7 @@ startService({
     });
     registerBankIdRoutes(app, bankIdService, strictLimit);
 
-    registerInternalFixtures(app, { requireUser, requireService });
+    registerInternalFixtures(app, { requireService });
 
     // Fas 6 (PLAN.md): "städa utgångna user_tokens" — user_tokens ägs av
     // auth (architecture.md #1), så den delen av det dagliga jobbet bor

@@ -1,8 +1,14 @@
 // Databasrad -> API-form. Personnumret lämnar ALDRIG API:t — varken
 // krypterat eller i klartext (domain.md #19–20). hasPnr räcker för UI:t.
 
+import type { CustomerDto } from "@faktura/contracts";
 import type { CustomerRow } from "./types";
 
+// Ingen explicit returtyp här (medvetet, avviker från code-style.md #19):
+// funktionens returvärde flödar in i JsonValue-typade slots (idempotency.ts).
+// Ett namngivet interface saknar implicit index-signatur och skulle bryta
+// den typningen — `satisfies` ger samma kompileringsskydd (en mapper som
+// glider bort från CustomerDto slutar typechecka) utan det problemet.
 export function toView(row: CustomerRow) {
   return {
     id: row.id,
@@ -19,7 +25,7 @@ export function toView(row: CustomerRow) {
     },
     paymentTermsDays: row.payment_terms_days,
     createdAt: row.created_at.toISOString(),
-  };
+  } satisfies CustomerDto;
 }
 
 /** S2S-vy för documents (PDF-adressblock). Fortfarande inget personnummer. */

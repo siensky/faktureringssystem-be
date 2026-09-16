@@ -2,6 +2,7 @@
 // #8). Snapshoten är undantaget: den är den frusna interna posten som
 // documents renderar PDF ur, och håller öre kvar som öre för exakthet.
 
+import type { InvoiceDetailDto, InvoiceLineDto, InvoiceSummaryDto } from "@faktura/contracts";
 import type { JsonObject } from "@faktura/shared";
 import type { CompanySettingsRow } from "../company-settings/types";
 import type { CustomerRow } from "../customers/types";
@@ -10,6 +11,11 @@ import type { InvoiceItemRow, InvoiceRow } from "./types";
 
 const kr = (ore: string | number): number => Number(ore) / 100;
 
+// Ingen explicit returtyp på dessa tre (medvetet, avviker från code-style.md
+// #19): returvärdet flödar in i JsonValue-typade slots (idempotency.ts). Ett
+// namngivet interface saknar implicit index-signatur och skulle bryta den
+// typningen — `satisfies` ger samma kompileringsskydd (en mapper som glider
+// bort från kontraktet slutar typechecka) utan det problemet.
 export function toLineView(item: InvoiceItemRow) {
   return {
     position: item.position,
@@ -21,7 +27,7 @@ export function toLineView(item: InvoiceItemRow) {
     lineExclVat: kr(item.line_excl_vat_ore),
     lineVat: kr(item.line_vat_ore),
     lineInclVat: kr(item.line_incl_vat_ore),
-  };
+  } satisfies InvoiceLineDto;
 }
 
 export function toSummary(row: InvoiceListRow) {
@@ -38,7 +44,7 @@ export function toSummary(row: InvoiceListRow) {
     dateDue: row.date_due,
     currency: row.currency,
     totalInclVat: kr(row.total_incl_vat_ore),
-  };
+  } satisfies InvoiceSummaryDto;
 }
 
 export function toDetail(row: InvoiceListRow, items: InvoiceItemRow[], paidOre: number) {
@@ -54,7 +60,7 @@ export function toDetail(row: InvoiceListRow, items: InvoiceItemRow[], paidOre: 
     remindsInvoiceId: row.reminds_invoice_id,
     supersededByInvoiceId: row.superseded_by_invoice_id,
     lines: items.map(toLineView),
-  };
+  } satisfies InvoiceDetailDto;
 }
 
 /** Frusen kopia för PDF-rendering. Id:n + råa öre, självständig av levande tabeller. */

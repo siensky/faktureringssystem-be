@@ -7,7 +7,7 @@
 // tenant-scopad väg.
 
 import type { Sql, TransactionSql } from "postgres";
-import type { TenantStatus, TokenType, UserRow, UserTokenRow } from "./types";
+import type { TenantStatus, TokenType, UserRole, UserRow, UserTokenRow } from "./types";
 
 type Db = Sql | TransactionSql;
 
@@ -36,6 +36,31 @@ export function createAuthRepository(sql: Sql) {
       const [row] = await sql<UserRow[]>`
         SELECT id, tenant_id, role, auth_method, email, password_hash, pnr_hash, email_verified_at
         FROM users WHERE id = ${id} LIMIT 1
+      `;
+      return row;
+    },
+
+    /** Fas 8: GET /auth/me. Tenant-scopad trots att id redan pekar unikt — fail-closed-mönstret. */
+    async findUserWithTenantById(
+      id: number,
+      tenantId: number,
+    ): Promise<
+      | { id: number; tenant_id: number; role: UserRole; email: string | null; tenant_name: string }
+      | undefined
+    > {
+      const [row] = await sql<
+        {
+          id: number;
+          tenant_id: number;
+          role: UserRole;
+          email: string | null;
+          tenant_name: string;
+        }[]
+      >`
+        SELECT u.id, u.tenant_id, u.role, u.email, t.name AS tenant_name
+        FROM users u JOIN tenants t ON t.id = u.tenant_id
+        WHERE u.id = ${id} AND u.tenant_id = ${tenantId}
+        LIMIT 1
       `;
       return row;
     },

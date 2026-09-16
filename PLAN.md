@@ -389,7 +389,11 @@ Hela sviten nedan. Separata Postgres-roller med `GRANT` bara på egna tabeller. 
 
 ### Fas 8 — Backoffice
 
-Inloggning, kunder, fakturalista med statusfilter, fakturaformulär med live-summering, fakturadetalj med `send`- och kreditknapp, leveransvy (`delivery_status`), betalningsöversikt, manuell matchning av omatchade transaktioner. Typer importeras från `packages/contracts` så en ändrad endpoint blir ett kompileringsfel.
+Inloggning, kunder, fakturalista med statusfilter, fakturaformulär med live-summering, fakturadetalj med `send`- och kreditknapp, leveransvy (`delivery_status`), betalningsöversikt, manuell matchning av omatchade transaktioner. Typer importeras från `packages/contracts` så en ändrad endpoint blir ett kompileringsfel — handskrivna REST-typer, inte genererade ur JSON Schema som planens Validering-beslut annars kräver; en medveten avvikelse för REST-formen specifikt (event-kontrakten är fortfarande schema + codegen), värd att stänga i en senare fas.
+
+Två små S2S-lösa tillägg som backoffice behöver men som inte fanns från fas 3/1: `GET /admin/deliveries?status=` i billing (leveransvyn — samma `invoices`-tabell, filtrerad på `delivery_status` i stället för `status`) och en riktig `GET /auth/me` i auth (ersätter fas 2:s testfixtur på samma path).
+
+**Klart när:** inloggning → kund → faktura med live-summering → skicka → kreditera → leveransvy → manuell betalningsmatchning går att genomföra i webbläsaren mot en körande stack, `bun run typecheck`/`lint`/`test` är gröna för `apps/backoffice` också, och tenant-isoleringen på de två nya endpointsen är e2e-testad.
 
 ### Fas 9 — Kundportal
 

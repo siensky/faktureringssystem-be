@@ -1,7 +1,5 @@
-// Fas 2-fixturer för att göra fasens "Klart när" testbart innan det finns
-// riktiga skyddade endpoints:
-//   GET /auth/me                    (requireUser)    — bevisar att X-Tenant-Id
-//                                                      ignoreras på användar-endpoints
+// Fas 2-fixtur för att göra fasens "Klart när" testbart innan det finns en
+// riktig S2S-endpoint:
 //   GET /internal/auth/tenant-echo  (requireService) — bevisar att en S2S-
 //                                                      handler som kräver tenant
 //                                                      avvisar utan X-Tenant-Id
@@ -9,15 +7,15 @@
 //                                                      och att en avstängd tenant
 //                                                      i headern ger 403
 // Scopet är `internal:fixture` — INTE `auth:tenant:read`, som planen
-// medvetet strök som scope. Båda endpoints tas bort när riktiga endpoints
-// finns (fas 3), precis som ping-debug-endpointen från fas 0.
+// medvetet strök som scope. Tas bort när en riktig S2S-endpoint finns,
+// precis som ping-debug-endpointen från fas 0.
+//
+// Den tidigare GET /auth/me-fixturen här (samma användning: bevisa att
+// X-Tenant-Id ignoreras på användar-endpoints) ersattes i fas 8 av den
+// riktiga GET /auth/me i auth/routes.ts — samma path, samma requireUser,
+// och samma fält (userId/tenantId/role) i svaret, plus tenantName/email.
 
-import {
-  TenantScopedRepository,
-  contextOf,
-  requireTenantHeader,
-  serviceContextOf,
-} from "@faktura/shared";
+import { TenantScopedRepository, requireTenantHeader, serviceContextOf } from "@faktura/shared";
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 
 export const FIXTURE_SCOPE = "internal:fixture";
@@ -33,15 +31,9 @@ class TenantEcho extends TenantScopedRepository {
 export function registerInternalFixtures(
   app: FastifyInstance,
   deps: {
-    requireUser: (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
     requireService: (scope: string) => (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
   },
 ): void {
-  app.get("/auth/me", { preHandler: deps.requireUser }, async (req) => {
-    const ctx = contextOf(req);
-    return { userId: ctx.userId, tenantId: ctx.tenantId, role: ctx.role };
-  });
-
   app.get(
     "/internal/auth/tenant-echo",
     { preHandler: deps.requireService(FIXTURE_SCOPE) },

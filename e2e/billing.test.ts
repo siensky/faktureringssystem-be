@@ -557,6 +557,32 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     ).toBe(404);
   });
 
+  // ── Fas 8: leveransvyn ──────────────────────────────────────────────
+  test("GET /admin/deliveries filtrerar på delivery_status och är tenant-isolerad", async () => {
+    await fillCompanySettings(A);
+    const customerId = await makeCustomer(A);
+    const draft = await createDraft(A, customerId);
+    // documents-konsumenten sätter delivery_status i drift — här sätts den
+    // direkt för att testa admin-endpointen isolerat från leveranspipen.
+    await sql`UPDATE invoices SET delivery_status = 'failed' WHERE id = ${draft.id}`;
+
+    const asA = await getTo(BILLING_URL, "/admin/deliveries?status=failed", auth(A));
+    expect(asA.status).toBe(200);
+    const bodyA = (await asA.json()) as { items: { id: number; deliveryStatus: string }[] };
+    const found = bodyA.items.find((i) => i.id === draft.id);
+    expect(found?.deliveryStatus).toBe("failed");
+
+    // B:s tenant får aldrig se A:s fakturor i leveransvyn.
+    const asB = await getTo(BILLING_URL, "/admin/deliveries?status=failed", auth(B));
+    const bodyB = (await asB.json()) as { items: { id: number }[] };
+    expect(bodyB.items.some((i) => i.id === draft.id)).toBe(false);
+
+    // Filtrerar bort fakturor i andra leveranslägen.
+    const asAQueued = await getTo(BILLING_URL, "/admin/deliveries?status=queued", auth(A));
+    const bodyAQueued = (await asAQueued.json()) as { items: { id: number }[] };
+    expect(bodyAQueued.items.some((i) => i.id === draft.id)).toBe(false);
+  });
+
   // ── S2S-endpoints ───────────────────────────────────────────────────
   test("S2S: scope krävs, X-Tenant-Id krävs, fel token avvisas", async () => {
     const good = await serviceToken("billing:company:read");

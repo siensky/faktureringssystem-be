@@ -7,6 +7,7 @@ import type { JsonObject } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
 import type { CustomerRow } from "../customers/types";
 import type {
+  DeliveryStatus,
   InvoiceItemRow,
   InvoiceRow,
   InvoiceStatus,
@@ -125,6 +126,31 @@ export class InvoiceRepository extends TenantScopedRepository {
         SELECT i.*, c.name AS customer_name
         FROM invoices i JOIN customers c ON c.id = i.customer_id
         WHERE i.tenant_id = ${this.tenantId} AND i.status = ${status}
+        ORDER BY i.created_at DESC, i.id DESC
+        LIMIT ${limit} OFFSET ${offset}
+      `;
+    }
+    return this.sql<InvoiceListRow[]>`
+      SELECT i.*, c.name AS customer_name
+      FROM invoices i JOIN customers c ON c.id = i.customer_id
+      WHERE i.tenant_id = ${this.tenantId}
+      ORDER BY i.created_at DESC, i.id DESC
+      LIMIT ${limit} OFFSET ${offset}
+    `;
+  }
+
+  /** Fas 8: leveransvyn — samma lista som list(), filtrerad på delivery_status i stället för status. */
+  async listByDeliveryStatus(opts: {
+    deliveryStatus?: DeliveryStatus;
+    limit: number;
+    offset: number;
+  }): Promise<InvoiceListRow[]> {
+    const { deliveryStatus, limit, offset } = opts;
+    if (deliveryStatus) {
+      return this.sql<InvoiceListRow[]>`
+        SELECT i.*, c.name AS customer_name
+        FROM invoices i JOIN customers c ON c.id = i.customer_id
+        WHERE i.tenant_id = ${this.tenantId} AND i.delivery_status = ${deliveryStatus}
         ORDER BY i.created_at DESC, i.id DESC
         LIMIT ${limit} OFFSET ${offset}
       `;

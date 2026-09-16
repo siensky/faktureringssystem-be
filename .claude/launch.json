@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "backoffice",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "--cwd", "apps/backoffice", "dev"],
+      "port": 5173
+    }
+  ]
+}
