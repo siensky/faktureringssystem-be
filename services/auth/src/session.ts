@@ -11,7 +11,7 @@ export interface SessionUser {
   id: number;
   tenant_id: number;
   role: "admin" | "customer";
-  /** Bara satt för role: "customer" (domain.md #33). */
+  /** Bara satt för role: "customer" (domain.md #32). */
   customer_id?: number | null;
 }
 

@@ -330,10 +330,55 @@ export function createAuthService(deps: Deps) {
         if (existing.email_verified_at) {
           throw new Conflict("Kunden har redan portal-åtkomst");
         }
+        try {
+          await sql.begin(async (tx) => {
+            await repo.revokeTokens(tx, existing.id, "customer_invite");
+            // E-posten kan ha rättats sedan förra (ej fullföljda) inbjudan —
+            // skriv den FÄRSKA adressen så länken går till rätt mottagare
+            // (kodgranskning fas 9, fynd 4).
+            await repo.updateEmail(tx, existing.id, email);
+            await issueTokenRow(
+              existing.id,
+              ctx.tenantId,
+              "customer_invite",
+              config.customerInviteTtlSeconds,
+              tx,
+            );
+            await writeAuditLog(tx, {
+              tenantId: ctx.tenantId,
+              actorUserId: ctx.userId,
+              action: "customer.invite_resent",
+              resourceType: "user",
+              resourceId: String(existing.id),
+              correlationId: ctx.correlationId,
+            });
+          });
+        } catch (error) {
+          // 23505 = unique_violation — users_email_unique är GLOBAL (0002_auth.js),
+          // så den nya adressen kan redan tillhöra ett annat konto (en admin i
+          // en annan tenant, eller en redan inbjuden kund). Ett tydligt 409 i
+          // stället för att låta det bli ett okänt fel -> 500 (kodgranskning
+          // fas 9, fynd 3).
+          if ((error as { code?: string }).code === "23505") {
+            throw new Conflict("E-postadressen används redan av ett annat konto");
+          }
+          throw error;
+        }
+        return OK;
+      }
+
+      // Slumpmässig, okänd placeholder — se repository.ts:s kommentar.
+      const passwordHash = await hashPassword(randomUUID());
+      try {
         await sql.begin(async (tx) => {
-          await repo.revokeTokens(tx, existing.id, "customer_invite");
+          const { id: userId } = await repo.insertCustomerInviteUser(tx, {
+            tenantId: ctx.tenantId,
+            customerId: input.customerId,
+            email,
+            passwordHash,
+          });
           await issueTokenRow(
-            existing.id,
+            userId,
             ctx.tenantId,
             "customer_invite",
             config.customerInviteTtlSeconds,
@@ -342,40 +387,19 @@ export function createAuthService(deps: Deps) {
           await writeAuditLog(tx, {
             tenantId: ctx.tenantId,
             actorUserId: ctx.userId,
-            action: "customer.invite_resent",
+            action: "customer.invited",
             resourceType: "user",
-            resourceId: String(existing.id),
+            resourceId: String(userId),
             correlationId: ctx.correlationId,
           });
         });
-        return OK;
+      } catch (error) {
+        // Samma 23505-fall som ovan, för en HELT NY inbjudan.
+        if ((error as { code?: string }).code === "23505") {
+          throw new Conflict("E-postadressen används redan av ett annat konto");
+        }
+        throw error;
       }
-
-      // Slumpmässig, okänd placeholder — se repository.ts:s kommentar.
-      const passwordHash = await hashPassword(randomUUID());
-      await sql.begin(async (tx) => {
-        const { id: userId } = await repo.insertCustomerInviteUser(tx, {
-          tenantId: ctx.tenantId,
-          customerId: input.customerId,
-          email,
-          passwordHash,
-        });
-        await issueTokenRow(
-          userId,
-          ctx.tenantId,
-          "customer_invite",
-          config.customerInviteTtlSeconds,
-          tx,
-        );
-        await writeAuditLog(tx, {
-          tenantId: ctx.tenantId,
-          actorUserId: ctx.userId,
-          action: "customer.invited",
-          resourceType: "user",
-          resourceId: String(userId),
-          correlationId: ctx.correlationId,
-        });
-      });
       return OK;
     },
 

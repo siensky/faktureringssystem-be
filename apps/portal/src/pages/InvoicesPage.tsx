@@ -22,7 +22,7 @@ export function InvoicesPage() {
       {summary && (
         <div className="mb-6 rounded-lg border border-slate-200 bg-white p-4">
           <div className="text-sm text-slate-500">Utestående skuld</div>
-          <div className="text-2xl font-semibold">{formatSEK(summary.outstandingOre / 100)}</div>
+          <div className="text-2xl font-semibold">{formatSEK(summary.outstanding)}</div>
           <div className="text-sm text-slate-500">
             {summary.outstandingInvoiceCount === 1
               ? "1 obetald faktura"

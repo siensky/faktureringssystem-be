@@ -19,7 +19,7 @@ export interface AccessTokenClaims {
   userId: number;
   tenantId: number;
   role: "admin" | "customer";
-  /** Bara satt (och obligatoriskt) för role: "customer" — se domain.md #33,
+  /** Bara satt (och obligatoriskt) för role: "customer" — se domain.md #32,
    *  Åtkomstkontroll i två lager: rätt tenant OCH rätt kund. */
   customerId?: number;
 }

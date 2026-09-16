@@ -15,7 +15,7 @@ export interface RequestContext {
   userId: number;
   tenantId: number;
   role: "admin" | "customer";
-  /** Bara satt för role: "customer" (domain.md #33, två lager åtkomstkontroll). */
+  /** Bara satt för role: "customer" (domain.md #32, två lager åtkomstkontroll). */
   customerId?: number;
   /** Följer med genom hela kedjan för spårbarhet (architecture.md #5). */
   correlationId: string;
@@ -38,7 +38,7 @@ export abstract class TenantScopedRepository {
 
   /**
    * Kund-id att filtrera på i portalen — samma "failar stängt"-princip som
-   * tenantId (domain.md #33: rätt tenant OCH rätt kund). Bara portal-
+   * tenantId (domain.md #32: rätt tenant OCH rätt kund). Bara portal-
    * repositoryn som byggs på en role: "customer"-kontext ska anropa den
    * här; en admin-kontext saknar customerId och ska aldrig fråga efter det.
    */

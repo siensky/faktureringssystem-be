@@ -46,10 +46,12 @@ export interface PortalInvoicePdfDto {
   expiresAt: string;
 }
 
-/** GET /portal/account-summary — domain.md #33: status IN ('sent','overdue')
- *  räknar en påminnelsekedja exakt en gång (originalet är 'superseded'). */
+/** GET /portal/account-summary — PLAN.md fas 9 / domain.md #15: status IN
+ *  ('sent','overdue') räknar en påminnelsekedja exakt en gång (originalet
+ *  är 'superseded'). Kronor, precis som varje annat beloppsfält i den här
+ *  filen (database.md #8) — kodgranskning fas 9, fynd 7. */
 export interface PortalAccountSummaryDto {
-  outstandingOre: number;
+  outstanding: number;
   outstandingInvoiceCount: number;
 }
 

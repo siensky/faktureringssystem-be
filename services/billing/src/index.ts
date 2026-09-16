@@ -101,7 +101,7 @@ startService({
     registerInvoiceRoutes(app, invoiceService, sql, { userChain, requireService });
 
     // Fas 9: kundportalen — skrivskyddad läsning av EGNA fakturor
-    // (två lager åtkomstkontroll: tenant OCH customerId, domain.md #33),
+    // (två lager åtkomstkontroll: tenant OCH customerId, domain.md #32),
     // plus en S2S-läsning mot documents för PDF-URL:en.
     const portalService = createPortalService(sql, ctx.redis);
     registerPortalRoutes(app, portalService, { customerChain });

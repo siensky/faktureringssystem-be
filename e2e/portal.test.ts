@@ -248,6 +248,78 @@ describe.skipIf(!RUN)("fas 9 e2e — kundportal", () => {
     expect(decodeJwt(tokens.accessToken).role).toBe("customer");
   });
 
+  test("förnyad inbjudan med RÄTTAD e-post: länken går till den nya adressen, den gamla slutar fungera", async () => {
+    const admin = await newAdmin("renewEmail");
+    const wrongEmail = `fel-${uniq()}@ex.test`;
+    const customerId = await makeCustomer(admin, wrongEmail);
+
+    const first = await postTo(
+      AUTH_URL,
+      "/auth/customer-invites",
+      { customerId, email: wrongEmail },
+      auth(admin),
+    );
+    expect(first.status).toBe(201);
+
+    // Admin upptäcker felstavningen och bjuder in på nytt med RÄTT adress,
+    // innan kunden hunnit fullfölja den första (kodgranskning fas 9, fynd 4).
+    const correctEmail = `ratt-${uniq()}@ex.test`;
+    const second = await postTo(
+      AUTH_URL,
+      "/auth/customer-invites",
+      { customerId, email: correctEmail },
+      auth(admin),
+    );
+    expect(second.status).toBe(201);
+
+    // Den nya länken hämtas på den NYA adressen.
+    const tokenRes = await get(
+      `/auth/dev/token?email=${encodeURIComponent(correctEmail)}&type=customer_invite`,
+    );
+    expect(tokenRes.status).toBe(200);
+    const { token } = (await tokenRes.json()) as { token: string };
+    const accept = await post("/auth/accept-customer-invite", {
+      token,
+      password: CUSTOMER_PASSWORD,
+    });
+    expect(accept.status).toBe(200);
+
+    // Inloggning på den GAMLA (felstavade) adressen fungerar inte längre —
+    // raden pekar nu på den rätta.
+    const loginOld = await post("/auth/login", {
+      email: wrongEmail,
+      password: CUSTOMER_PASSWORD,
+    });
+    expect(loginOld.status).toBe(401);
+    const loginNew = await post("/auth/login", {
+      email: correctEmail,
+      password: CUSTOMER_PASSWORD,
+    });
+    expect(loginNew.status).toBe(200);
+  });
+
+  test("kundinbjudan: kolliderande e-post (globalt unik över users) ger 409, inte 500", async () => {
+    // users_email_unique (0002_auth.js) är global — en NY inbjudan på en
+    // e-post som redan tillhör ett annat konto (här: en admin i en annan
+    // tenant) ska ge ett tydligt fel, inte en unique-violation som läcker
+    // upp som 500 (kodgranskning fas 9, fynd 3).
+    const takenEmail = `upptagen-${uniq()}@ex.test`;
+    const adminWithTakenEmail = await registerVerifyLogin(takenEmail);
+    tenantIds.push(decodeJwt(adminWithTakenEmail.accessToken).tenantId as number);
+    expect(decodeJwt(adminWithTakenEmail.accessToken).role).toBe("admin");
+
+    const invitingAdmin = await newAdmin("collisionInviter");
+    const customerId = await makeCustomer(invitingAdmin);
+
+    const invite = await postTo(
+      AUTH_URL,
+      "/auth/customer-invites",
+      { customerId, email: takenEmail },
+      auth(invitingAdmin),
+    );
+    expect(invite.status).toBe(409);
+  });
+
   test("rollisolering i portalen: kund ser bara egna, ej draft, ej en annan kunds — 404 över kund- och tenant-gränsen", async () => {
     const admin = await newAdmin("iso");
     await fillCompanySettings(admin);
@@ -314,7 +386,7 @@ describe.skipIf(!RUN)("fas 9 e2e — kundportal", () => {
     const summaryRes = await getTo(BILLING_URL, "/portal/account-summary", cAuth);
     expect(summaryRes.status).toBe(200);
     const summary = (await summaryRes.json()) as {
-      outstandingOre: number;
+      outstanding: number;
       outstandingInvoiceCount: number;
     };
 
@@ -325,7 +397,8 @@ describe.skipIf(!RUN)("fas 9 e2e — kundportal", () => {
       SELECT COALESCE(SUM(total_incl_vat_ore), 0)::bigint AS sum FROM invoices
       WHERE id IN ${sql([untouchedId, reminderId])}
     `;
-    expect(summary.outstandingOre).toBe(Number(sum));
+    // Kronor, inte öre (kodgranskning fas 9, fynd 7).
+    expect(summary.outstanding).toBe(Number(sum) / 100);
   });
 
   test("PDF: signerad URL för egen faktura, 404 för annan kunds", async () => {

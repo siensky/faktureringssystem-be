@@ -1,7 +1,7 @@
 // ALL SQL för kundportalen (database.md #22). Skrivskyddad — portalen
 // ändrar aldrig en faktura. TenantScopedRepository ger this.tenantId;
 // this.customerId (samma bas, packages/shared/src/repository) är det
-// ANDRA av de två åtkomstlagren (domain.md #33) — kastar precis som
+// ANDRA av de två åtkomstlagren (domain.md #32) — kastar precis som
 // tenantId om kontexten saknar det, hellre ett 500 än en läcka.
 //
 // status != 'draft' filtreras BORT överallt: ett utkast har inget
@@ -59,8 +59,9 @@ export class PortalRepository extends TenantScopedRepository {
     return Number(row?.paid ?? 0);
   }
 
-  /** domain.md #33: status IN ('sent','overdue') — en påminnelsekedja
-   *  räknas exakt en gång, originalet är 'superseded' och faller bort. */
+  /** PLAN.md fas 9 / domain.md #15 (påminnelsen är en NY faktura, originalet
+   *  blir 'superseded' — inte en ändring): status IN ('sent','overdue')
+   *  räknar en påminnelsekedja exakt en gång, originalet faller bort. */
   async accountSummary(): Promise<AccountSummaryRow> {
     const [row] = await this.sql<AccountSummaryRow[]>`
       SELECT

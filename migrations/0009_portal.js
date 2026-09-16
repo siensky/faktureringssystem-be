@@ -13,7 +13,10 @@
  * i samma tjänst). FK-kontrollen vid INSERT/UPDATE körs oavsett den
  * infogande rollens egna SELECT-rättigheter (Postgres RI-triggers, inte
  * sessionens ACL) så auth-rollen behöver INGEN ny GRANT i
- * migrations/0008_service_roles.js för att detta ska fungera.
+ * migrations/0008_service_roles.js för att detta ska fungera. Uttryckligen
+ * dokumenterat som ett andra, litet tjänstegränsundantag i
+ * rules/architecture.md #2, bredvid det redan befintliga (billing läser
+ * auths tenants.status).
  *
  * ON DELETE CASCADE: en kund utan fakturor FÅR raderas (domain.md #21) —
  * då ska inte en föräldralös portal-inloggning bli kvar. En kund MED

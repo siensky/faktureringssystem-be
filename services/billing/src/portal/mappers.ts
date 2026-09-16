@@ -58,7 +58,7 @@ export function toDetail(
 
 export function toAccountSummary(row: AccountSummaryRow) {
   return {
-    outstandingOre: Number(row.outstanding_ore),
+    outstanding: kr(row.outstanding_ore),
     outstandingInvoiceCount: row.outstanding_count,
   };
 }

@@ -190,7 +190,15 @@ export function CustomerEditPage() {
               </a>
             </p>
           ) : (
-            <p className="text-sm text-slate-500">Inbjudan skickad.</p>
+            // Riktig e-postleverans av länken är inte byggd än (känd,
+            // dokumenterad lucka — samma som email_verification/
+            // password_reset, se services/auth/src/auth/services.ts:s
+            // issueDevToken-kommentar). Säg det rakt ut i stället för att
+            // låtsas att ett mejl gått iväg (kodgranskning fas 9, fynd 1).
+            <p className="text-sm text-amber-700">
+              Kontot är skapat, men automatisk e-postleverans av länken är inte byggd än. Skicka
+              länken till kunden manuellt tills dess.
+            </p>
           )
         ) : (
           <button

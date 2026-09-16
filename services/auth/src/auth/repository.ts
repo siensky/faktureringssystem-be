@@ -178,6 +178,12 @@ export function createAuthRepository(sql: Sql) {
         UPDATE users SET password_hash = ${passwordHash}, updated_at = now() WHERE id = ${userId}
       `;
     },
+
+    /** users_email_unique (0002_auth.js) är GLOBAL — en krock kastar 23505,
+     *  fångas av anroparen (kodgranskning fas 9, fynd 3). */
+    async updateEmail(db: Db, userId: number, email: string): Promise<void> {
+      await db`UPDATE users SET email = ${email}, updated_at = now() WHERE id = ${userId}`;
+    },
   };
 }
 
