@@ -3,15 +3,21 @@
 // "grov i nginx, fin i Fastify") — den per-KONTO-strypningen sitter i
 // servicen via Redis.
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createAuthControllers } from "./controllers";
 import * as schema from "./schema";
 import type { AuthService } from "./services";
 
+type PreHandler = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
+
 export function registerAuthRoutes(
   app: FastifyInstance,
   service: AuthService,
-  opts: { devEndpointsEnabled: boolean; strictRateLimitMax: number },
+  opts: {
+    devEndpointsEnabled: boolean;
+    strictRateLimitMax: number;
+    requireUser: PreHandler;
+  },
 ): void {
   const c = createAuthControllers(service);
   const strictLimit = {
@@ -25,6 +31,7 @@ export function registerAuthRoutes(
     c.verifyEmail,
   );
   app.post("/auth/login", { schema: { body: schema.loginBody }, ...strictLimit }, c.login);
+  app.get("/auth/me", { preHandler: [opts.requireUser] }, c.me);
   app.post("/auth/refresh", { schema: { body: schema.refreshBody } }, c.refresh);
   app.post("/auth/logout", { schema: { body: schema.logoutBody } }, c.logout);
   app.post(

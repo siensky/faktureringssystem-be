@@ -4,9 +4,15 @@ import type { Sql } from "postgres";
 import { idempotencyKeyOf } from "../guards";
 import { withIdempotency } from "../idempotency";
 import type { InvoiceService } from "./services";
-import type { CreateInvoiceInput, InvoiceStatus, UpdateInvoiceInput } from "./types";
+import type {
+  CreateInvoiceInput,
+  DeliveryStatus,
+  InvoiceStatus,
+  UpdateInvoiceInput,
+} from "./types";
 
 type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
+type ListDeliveriesQuery = { status?: DeliveryStatus; limit?: number; offset?: number };
 
 export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
   return {
@@ -30,6 +36,13 @@ export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
 
     async get(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {
       return reply.send(await service.get(contextOf(request), request.params.id));
+    },
+
+    async listDeliveries(
+      request: FastifyRequest<{ Querystring: ListDeliveriesQuery }>,
+      reply: FastifyReply,
+    ) {
+      return reply.send(await service.listDeliveries(contextOf(request), request.query));
     },
 
     async update(

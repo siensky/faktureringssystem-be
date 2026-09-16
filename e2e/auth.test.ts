@@ -66,6 +66,30 @@ describe.skipIf(!RUN)("auth fas 1 e2e", () => {
     expect(afterLogout.status).toBe(401);
   });
 
+  test("GET /auth/me kräver token och returnerar rätt tenant/roll, 401 utan token", async () => {
+    const email = `me-${uniq()}@example.test`;
+    await registerAndVerify(email);
+    const login = await post("/auth/login", { email, password: PASSWORD });
+    const tokens = (await login.json()) as { accessToken: string };
+    const claims = decodeJwt(tokens.accessToken);
+
+    const me = await get("/auth/me", { authorization: `Bearer ${tokens.accessToken}` });
+    expect(me.status).toBe(200);
+    const body = (await me.json()) as {
+      userId: number;
+      tenantId: number;
+      tenantName: string;
+      email: string | null;
+      role: string;
+    };
+    expect(body.tenantId).toBe(claims.tenantId);
+    expect(body.role).toBe("admin");
+    expect(body.email).toBe(email.toLowerCase());
+    expect(typeof body.tenantName).toBe("string");
+
+    expect((await get("/auth/me")).status).toBe(401);
+  });
+
   test("login innan verifiering ger 403", async () => {
     const email = `overifierad-${uniq()}@example.test`;
     const reg = await post("/auth/register", {

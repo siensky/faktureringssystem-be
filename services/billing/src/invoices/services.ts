@@ -34,6 +34,7 @@ import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
 import { type InsertItemData, InvoiceRepository } from "./repository";
 import type {
   CreateInvoiceInput,
+  DeliveryStatus,
   InvoiceRow,
   InvoiceStatus,
   InvoiceTemplateRow,
@@ -223,6 +224,22 @@ export function createInvoiceService(sql: Sql) {
 
     async get(ctx: RequestContext, id: number) {
       return detail(ctx, sql, id);
+    },
+
+    /** Fas 8: leveransvyn — samma paginering som list(), filtrerad på delivery_status. */
+    async listDeliveries(
+      ctx: RequestContext,
+      opts: { status?: DeliveryStatus; limit?: number; offset?: number },
+    ) {
+      const limit = Math.min(opts.limit ?? PAGE_DEFAULT, PAGE_MAX);
+      const offset = opts.offset ?? 0;
+      const rows = await invRepo(ctx).listByDeliveryStatus({
+        deliveryStatus: opts.status,
+        limit: limit + 1,
+        offset,
+      });
+      const hasMore = rows.length > limit;
+      return { items: rows.slice(0, limit).map(toSummary), hasMore };
     },
 
     async update(ctx: RequestContext, id: number, input: UpdateInvoiceInput) {

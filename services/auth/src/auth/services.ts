@@ -11,7 +11,7 @@ import {
   Unauthorized,
   signAccessToken,
 } from "@faktura/shared";
-import type { Logger } from "@faktura/shared";
+import type { Logger, RequestContext } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { writeAuditLog } from "../audit";
@@ -21,7 +21,7 @@ import { writeEvent } from "../outbox";
 import { generateToken, hashPassword, hashToken, verifyPassword } from "../passwords";
 import { createSessionIssuer } from "../session";
 import { assertNotLockedOut, clearLoginFailures, recordLoginFailure } from "../throttle";
-import { OK, toTokenPairResponse } from "./mappers";
+import { OK, toCurrentUserView, toTokenPairResponse } from "./mappers";
 import { createAuthRepository } from "./repository";
 import type { LoginInput, RegisterInput, TenantStatus, TokenType } from "./types";
 
@@ -169,6 +169,13 @@ export function createAuthService(deps: Deps) {
       await assertTenantActive(user.tenant_id);
       await clearLoginFailures(redis, email);
       return sessionIssuer.issue(user);
+    },
+
+    /** Fas 8: GET /auth/me. userId/tenantId kommer redan verifierade ur access-token. */
+    async me(ctx: RequestContext) {
+      const row = await repo.findUserWithTenantById(ctx.userId, ctx.tenantId);
+      if (!row) throw new NotFound("Användaren finns inte");
+      return toCurrentUserView(row);
     },
 
     async refresh(refreshToken: string) {

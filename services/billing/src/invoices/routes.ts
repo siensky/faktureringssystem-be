@@ -3,9 +3,15 @@ import type { Sql } from "postgres";
 import { createInvoiceControllers } from "./controllers";
 import * as schema from "./schema";
 import type { InvoiceService } from "./services";
-import type { CreateInvoiceInput, InvoiceStatus, UpdateInvoiceInput } from "./types";
+import type {
+  CreateInvoiceInput,
+  DeliveryStatus,
+  InvoiceStatus,
+  UpdateInvoiceInput,
+} from "./types";
 
 type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
+type ListDeliveriesQuery = { status?: DeliveryStatus; limit?: number; offset?: number };
 
 type PreHandler = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -35,6 +41,11 @@ export function registerInvoiceRoutes(
     "/admin/invoices/:id",
     { ...u, schema: { params: schema.invoiceIdParams } },
     c.get,
+  );
+  app.get<{ Querystring: ListDeliveriesQuery }>(
+    "/admin/deliveries",
+    { ...u, schema: { querystring: schema.listDeliveriesQuery } },
+    c.listDeliveries,
   );
   app.put<{ Params: { id: number }; Body: UpdateInvoiceInput }>(
     "/admin/invoices/:id",

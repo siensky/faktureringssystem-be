@@ -65,6 +65,19 @@ export const listInvoicesQuery = {
   },
 } as const;
 
+export const listDeliveriesQuery = {
+  type: "object",
+  additionalProperties: false,
+  properties: {
+    status: {
+      type: "string",
+      enum: ["none", "queued", "sent", "delivered", "bounced", "failed"],
+    },
+    limit: { type: "integer", minimum: 1, maximum: 200 },
+    offset: { type: "integer", minimum: 0 },
+  },
+} as const;
+
 export const byOcrQuery = {
   type: "object",
   additionalProperties: false,

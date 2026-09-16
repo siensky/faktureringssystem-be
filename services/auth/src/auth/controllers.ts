@@ -2,6 +2,7 @@
 // #2). Ingen affärslogik. correlationId plockas från headern om den finns,
 // annars genererar servicen en.
 
+import { contextOf } from "@faktura/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { AuthService } from "./services";
 import type { LoginInput, RegisterInput, TokenType } from "./types";
@@ -22,6 +23,10 @@ export function createAuthControllers(service: AuthService) {
 
     async login(req: FastifyRequest<{ Body: LoginInput }>, reply: FastifyReply) {
       return reply.send(await service.login(req.body));
+    },
+
+    async me(req: FastifyRequest, reply: FastifyReply) {
+      return reply.send(await service.me(contextOf(req)));
     },
 
     async refresh(req: FastifyRequest<{ Body: { refreshToken: string } }>, reply: FastifyReply) {
