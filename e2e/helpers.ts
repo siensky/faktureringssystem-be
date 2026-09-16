@@ -10,6 +10,13 @@ export const PAYMENTS_URL = process.env.PAYMENTS_URL ?? "http://localhost:4003";
 export const MAILPIT_URL = process.env.MAILPIT_URL ?? "http://localhost:8025";
 export const DB_URL =
   process.env.E2E_DATABASE_URL ?? "postgresql://sienna:changeme@localhost:5434/invoice_db";
+// Fas 7: payments EGEN, restriktiva Postgres-roll (inte superusern ovan) —
+// för att bevisa att GRANT:en i migrations/0008_service_roles.js faktiskt
+// håller (e2e/db-roles.test.ts). Samma "changeme"-placeholder-mönster som
+// DB_URL — måste överridas via env i en riktig miljö.
+export const PAYMENTS_DB_URL =
+  process.env.E2E_PAYMENTS_DATABASE_URL ??
+  "postgresql://payments:changeme@localhost:5434/invoice_db";
 export const MQ_URL = process.env.E2E_RABBITMQ_URL ?? "amqp://admin:changeme@localhost:5672";
 export const EMAIL_WEBHOOK_SECRET =
   process.env.E2E_EMAIL_WEBHOOK_SECRET ?? "changeme-email-webhook";

@@ -39,4 +39,4 @@ AI-hjälp är fortsatt värdefull utöver implementationen: frågor, förklaring
 
 ## Status
 
-Fas 0–5 mergade. Fas 6 (automatisering: dagligt cronjobb i billing — overdue, påminnelser, återkommande fakturor, städning; plus en liten egen token-städning i auth) ligger i PR och väntar på granskning. Full arkitektur: se plan-filen i `~/.claude/plans/`.
+Fas 0–6 mergade. Fas 7 (härdning: separata Postgres-roller med GRANT bara på egna tabeller, larm på dead-letter/omatchade transaktioner via GET /internal/ops/alerts i billing, riktig RabbitMQ-dead-letter i documents, samt en stor tvärgående e2e-svit) är byggd på branchen `fas7` men ännu inte commitad eller en PR. Full arkitektur: se plan-filen i `~/.claude/plans/`.

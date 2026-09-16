@@ -7,15 +7,15 @@ Gäller all kod i alla tjänster. Bryts en regel här växer tjänsterna ihop oc
 | Tjänst | Äger tabellerna |
 |---|---|
 | auth | `tenants`, `users`, `user_tokens`, `service_clients` |
-| billing | `company_settings`, `customers`, `invoices`, `invoice_items`, `invoice_templates` |
-| documents | `documents`, `emails` |
+| billing | `company_settings`, `customers`, `invoices`, `invoice_items`, `invoice_templates`, `invoice_snapshots`, `invoice_payments` |
+| documents | `documents`, `email_outbox`, `email_webhook_events` |
 | payments | `bank_transactions` |
 
-`event_outbox` och `processed_events` är **gemensamma tabeller** — en av varje, inte en per tjänst. `event_outbox.source_service` och `processed_events.consumer` skiljer raderna åt, och varje tjänst rör bara sina egna. En tabell med en kolumn är enklare än fyra tabeller som gör samma sak.
+`event_outbox`, `processed_events`, `idempotency_keys` och `audit_log` är **gemensamma tabeller** — en av varje, inte en per tjänst. `event_outbox.source_service` och `processed_events.consumer` skiljer raderna åt, och varje tjänst rör bara sina egna; `idempotency_keys` har ingen ägande-kolumn alls (en utgången nyckel är död för alla tjänster lika) och `audit_log` tar bara emot `INSERT` (append-only, aldrig `SELECT`/`UPDATE`/`DELETE`, av någon roll). En tabell med en kolumn är enklare än fyra tabeller som gör samma sak.
 
 1. **Endast ägande tjänst skriver till sina tabeller.** Ingen `INSERT`, `UPDATE` eller `DELETE` mot en annan tjänsts tabell.
-2. **Endast ägande tjänst läser sina tabeller.** Behöver du data från en annan tjänst: anropa dess API eller lyssna på dess event. Aldrig en `JOIN` över gränsen.
-3. Databasen är gemensam, så inget hindrar dig rent tekniskt. Regeln upprätthålls av kodgranskning — det är därför den står här.
+2. **Endast ägande tjänst läser sina tabeller.** Behöver du data från en annan tjänst: anropa dess API eller lyssna på dess event. Aldrig en `JOIN` över gränsen. **Ett dokumenterat, kvarstående undantag:** billing läser auths `tenants.status` direkt (`isTenantActive`, `listActiveTenantIds`) — den riktiga lösningen kräver en avstängningsendpoint och en operatörsroll som inte finns i någon planerad fas ännu (se kommentarerna vid de två anropen).
+3. Databasen är gemensam, så inget hindrar dig rent tekniskt. Fas 7 gör regeln till en **databasgaranti**: varje tjänst kör med sin egen Postgres-roll (`migrations/0008_service_roles.js`), med `GRANT` bara på tabellerna ovan — ett `INSERT`/`UPDATE`/`DELETE` mot en annan tjänsts tabell ger nu ett rättighetsfel, inte bara en anmärkning i kodgranskning.
 
 ## Event
 

@@ -91,6 +91,30 @@ export async function publishJson(
   });
 }
 
+/**
+ * Fas 7: passiv koll av en kös meddelandeantal (queue.declare med
+ * passive=true) — t.ex. events.dlq:s djup för GET /internal/ops/alerts.
+ * Kräver bara "configure"-behörighet på just den kön (infra/rabbitmq/
+ * init.sh), inte "read" — den KONSUMERAR aldrig.
+ *
+ * Egen, kortlivad kanal: brokern STÄNGER kanalen om kön saknas eller
+ * behörighet nekas (ett AMQP-kanalfel, inte bara ett avvisat anrop) — att
+ * göra detta på den delade huvudkanalen (ping/publish) skulle då riva ner
+ * OBESLÄKTAD funktionalitet som råkar dela den kanalen.
+ */
+export async function checkQueueDepth(connection: ChannelModel, queue: string): Promise<number> {
+  const channel = await connection.createChannel();
+  try {
+    const { messageCount } = await channel.checkQueue(queue);
+    return messageCount;
+  } finally {
+    // Kan i sig kasta om brokern redan stängt kanalen (t.ex. just det fel
+    // vi försöker rapportera) — svälj det, men maskera aldrig det
+    // ursprungliga felet från checkQueue.
+    await channel.close().catch(() => {});
+  }
+}
+
 export type JsonMessageHandler = (message: unknown, raw: ConsumeMessage) => Promise<void>;
 
 /**

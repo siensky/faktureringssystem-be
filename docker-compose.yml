@@ -72,9 +72,33 @@ services:
       BILLING_OPS_CLIENT_ID: ${BILLING_OPS_CLIENT_ID}
       BILLING_OPS_CLIENT_SECRET: ${BILLING_OPS_CLIENT_SECRET}
       BILLING_OPS_CLIENT_SCOPES: ${BILLING_OPS_CLIENT_SCOPES}
+      # billing SJÄLV, för GET /internal/ops/alerts S2S mot payments (fas 7).
+      BILLING_CLIENT_ID: ${BILLING_CLIENT_ID}
+      BILLING_CLIENT_SECRET: ${BILLING_CLIENT_SECRET}
+      BILLING_CLIENT_SCOPES: ${BILLING_CLIENT_SCOPES}
     depends_on:
       db:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+
+  # Fas 7: sätter LOGIN-lösenordet för de fyra tjänsternas Postgres-roller
+  # (skapade, NOLOGIN, i migrations/0008_service_roles.js). Engångscontainer,
+  # samma mönster som rabbitmq-init nedan — postgres:15-alpine ger psql utan
+  # ett eget Dockerfile. Kör EFTER migrate (rollerna måste redan finnas) och
+  # FÖRE de fyra tjänsterna (som kopplar upp med just de här lösenorden).
+  postgres-init:
+    image: postgres:15-alpine
+    environment:
+      DATABASE_URL: ${DATABASE_URL}
+      AUTH_DB_PASSWORD: ${AUTH_DB_PASSWORD}
+      BILLING_DB_PASSWORD: ${BILLING_DB_PASSWORD}
+      PAYMENTS_DB_PASSWORD: ${PAYMENTS_DB_PASSWORD}
+      DOCUMENTS_DB_PASSWORD: ${DOCUMENTS_DB_PASSWORD}
+    volumes:
+      - ./infra/postgres/init.sh:/init.sh:ro
+    entrypoint: ["sh", "/init.sh"]
+    depends_on:
       migrate:
         condition: service_completed_successfully
 
@@ -213,7 +237,11 @@ services:
       - "${AUTH_PORT}:${AUTH_PORT}"
     environment:
       PORT: ${AUTH_PORT}
-      DATABASE_URL: ${DATABASE_URL}
+      # Fas 7: egen, restriktiv Postgres-roll (GRANT bara på egna tabeller
+      # + SELECT/INSERT/UPDATE på event_outbox — migrations/0008_service_roles.js),
+      # inte den delade superusern DATABASE_URL. Samma mönster som RABBITMQ_URL
+      # nedan har använt sedan fas 0.
+      DATABASE_URL: postgresql://auth:${AUTH_DB_PASSWORD}@db:5432/${DB_NAME}
       RABBITMQ_URL: amqp://auth:${AUTH_RABBITMQ_PASSWORD}@rabbitmq:5672
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
@@ -239,6 +267,8 @@ services:
         condition: service_healthy
       rabbitmq-init:
         condition: service_completed_successfully
+      postgres-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:${AUTH_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -254,7 +284,11 @@ services:
       - "${BILLING_PORT}:${BILLING_PORT}"
     environment:
       PORT: ${BILLING_PORT}
-      DATABASE_URL: ${DATABASE_URL}
+      # Fas 7: egen, restriktiv Postgres-roll — se auth-tjänstens kommentar
+      # ovan. billing har DESSUTOM SELECT på tenants (isTenantActive,
+      # listActiveTenantIds) — det ENA dokumenterade, kvarstående
+      # tjänstegränsundantaget, se migrations/0008_service_roles.js.
+      DATABASE_URL: postgresql://billing:${BILLING_DB_PASSWORD}@db:5432/${DB_NAME}
       RABBITMQ_URL: amqp://billing:${BILLING_RABBITMQ_PASSWORD}@rabbitmq:5672
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
@@ -269,14 +303,25 @@ services:
       PNR_ENCRYPTION_KEY: ${PNR_ENCRYPTION_KEY}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      # Fas 7: S2S mot payments (unknown-bankgiro) för GET /internal/ops/alerts
+      # — samma mönster som payments BILLING_BASE_URL/PAYMENTS_CLIENT_ID.
+      AUTH_BASE_URL: http://auth:${AUTH_PORT}
+      PAYMENTS_BASE_URL: http://payments:${PAYMENTS_PORT}
+      BILLING_CLIENT_ID: ${BILLING_CLIENT_ID}
+      BILLING_CLIENT_SECRET: ${BILLING_CLIENT_SECRET}
+      BILLING_CLIENT_SCOPES: ${BILLING_CLIENT_SCOPES}
     depends_on:
       db:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
       rabbitmq-init:
+        condition: service_completed_successfully
+      postgres-init:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:${BILLING_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
@@ -293,7 +338,11 @@ services:
       - "${PAYMENTS_PORT}:${PAYMENTS_PORT}"
     environment:
       PORT: ${PAYMENTS_PORT}
-      DATABASE_URL: ${DATABASE_URL}
+      # Fas 7: egen, restriktiv Postgres-roll — se auth-tjänstens kommentar
+      # ovan. GRANT bara på bank_transactions + idempotency_keys/
+      # event_outbox — INGEN åtkomst till invoices (nås bara via
+      # BILLING_BASE_URL nedan, aldrig SQL).
+      DATABASE_URL: postgresql://payments:${PAYMENTS_DB_PASSWORD}@db:5432/${DB_NAME}
       RABBITMQ_URL: amqp://payments:${PAYMENTS_RABBITMQ_PASSWORD}@rabbitmq:5672
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
@@ -325,6 +374,8 @@ services:
         condition: service_healthy
       rabbitmq-init:
         condition: service_completed_successfully
+      postgres-init:
+        condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "bun", "-e", "fetch('http://localhost:${PAYMENTS_PORT}/health/ready').then(r => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))"]
       interval: 10s
@@ -340,7 +391,10 @@ services:
       - "${DOCUMENTS_PORT}:${DOCUMENTS_PORT}"
     environment:
       PORT: ${DOCUMENTS_PORT}
-      DATABASE_URL: ${DATABASE_URL}
+      # Fas 7: egen, restriktiv Postgres-roll — se auth-tjänstens kommentar
+      # ovan. GRANT bara på documents/email_outbox/email_webhook_events +
+      # processed_events/event_outbox.
+      DATABASE_URL: postgresql://documents:${DOCUMENTS_DB_PASSWORD}@db:5432/${DB_NAME}
       RABBITMQ_URL: amqp://documents:${DOCUMENTS_RABBITMQ_PASSWORD}@rabbitmq:5672
       REDIS_URL: ${REDIS_URL}
       CORS_ORIGIN: ${CORS_ORIGIN}
@@ -390,6 +444,8 @@ services:
       mailpit:
         condition: service_healthy
       rabbitmq-init:
+        condition: service_completed_successfully
+      postgres-init:
         condition: service_completed_successfully
     healthcheck:
       # Samma idé som ovan, fast med Pythons inbyggda urllib i stället för

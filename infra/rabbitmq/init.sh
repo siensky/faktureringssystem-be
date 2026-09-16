@@ -34,11 +34,16 @@ curl -sf -u "$AUTH" -X PUT "$API/exchanges/%2F/events" \
 
 # Dead-letter-exchange + en landningskö, deklarerade NU medan kö-argument
 # fortfarande är billiga att sätta. Köargument är OFÖRÄNDERLIGA i
-# RabbitMQ — att lägga till x-dead-letter-exchange senare (fas 7, en
-# riktig retry-policy med larm) skulle kräva att documents.events och
-# billing.events raderas och återskapas. Ingen av konsumenterna nackar
-# (requeue=false) eller sätter en TTL/max-length-policy ännu — det är
-# fas 7:s jobb — så den här kön tar inte emot något i praktiken idag.
+# RabbitMQ — att lägga till x-dead-letter-exchange senare skulle kräva att
+# documents.events och billing.events raderas och återskapas.
+#
+# Fas 7: alla konsumenter (documents/consumer.py, billings deliveries-
+# och payments-konsumenter) nackar nu (requeue=false) när de ger upp efter
+# maxantal försök, så meddelanden FAKTISKT landar här. En policy nedan
+# sätter message-ttl på events.dlq — utan den växer kön obegränsat om
+# ingen operatör tömmer den; 7 dagar ger gott om tid att upptäcka och
+# åtgärda innan meddelandet försvinner (GET /internal/ops/alerts i billing
+# visar ködjupet under tiden).
 echo "Deklarerar dead-letter-exchanget."
 curl -sf -u "$AUTH" -X PUT "$API/exchanges/%2F/events.dlx" \
   -H "Content-Type: application/json" \
@@ -49,6 +54,9 @@ curl -sf -u "$AUTH" -X PUT "$API/queues/%2F/events.dlq" \
 curl -sf -u "$AUTH" -X POST "$API/bindings/%2F/e/events.dlx/q/events.dlq" \
   -H "Content-Type: application/json" \
   -d '{}' > /dev/null
+curl -sf -u "$AUTH" -X PUT "$API/policies/%2F/events-dlq-ttl" \
+  -H "Content-Type: application/json" \
+  -d '{"pattern":"^events\\.dlq$","apply-to":"queues","definition":{"message-ttl":604800000}}' > /dev/null
 
 # Konsumenternas köer deklareras och BINDS här också, inte lämnat åt varje
 # tjänst att göra vid sin egen uppstart. Ett topic-exchange utan matchande
@@ -93,9 +101,18 @@ echo "Skapar tjänstekonton."
 create_user() {
   name="$1"
   password="$2"
+  # Valfri EXTRA resurs (regex-alternativ, REDAN escapad, t.ex.
+  # "events\\.dlq") att lägga till i "configure" — fas 7: billing behöver
+  # göra en PASSIV queue.declare (amqplibs checkQueue) mot events.dlq för
+  # att läsa dess meddelandeantal (GET /internal/ops/alerts). RabbitMQs
+  # behörighetsmodell kräver "configure" för queue.declare oavsett
+  # passive-flaggan — INTE "read" (den behövs bara för att KONSUMERA, vilket
+  # billing aldrig gör mot den kön). Tomt för de andra tre tjänsterna.
+  extra="${3:-}"
   # Behörigheter per tjänst, granskningsbart och smalt:
   #   configure : sin egen system.ping.<namn>-kö + sina egna "<namn>.*"-köer
   #               + system.ping-exchanget (fanout, deklareras av tjänsten)
+  #               + ev. extra (se ovan)
   #   write     : publicera på system.ping och events, binda sina egna köer,
   #               OCH publicera på default-exchanget ("amq.default"), som
   #               krävs för konsumenternas x-attempts-ompublicering — se
@@ -129,8 +146,19 @@ create_user() {
   # vilket avslöjade att behörigheten saknats sedan fas 4.
   #
   # Hela JSON-payloaden skrivs som en enkelcitatad mall (så sh inte rör
-  # backslash) och sed byter bara ut __NAME__. "configure" saknar "events".
-  permissions_json=$(printf '%s' '{"configure":"^(system\\.ping(\\.__NAME__)?|__NAME__\\..*)$","write":"^(amq\\.default|system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$","read":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$"}' | sed "s/__NAME__/$name/g")
+  # backslash) och sed byter bara ut __NAME__ — precis som förut.
+  # "configure" saknar "events".
+  permissions_json=$(printf '%s' '{"configure":"^(system\\.ping(\\.__NAME__)?|__NAME__\\..*__EXTRA__)$","write":"^(amq\\.default|system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$","read":"^(system\\.ping(\\.__NAME__)?|events|__NAME__\\..*)$"}' \
+    | sed "s/__NAME__/$name/g")
+
+  # __EXTRA__ ersätts INTE med sed: $extra kan innehålla bakstreck (t.ex.
+  # "events\\.dlq"), som sed:s ERSÄTTNINGSsyntax skulle tolka om (\1 m.m.).
+  # Ren strängdelning i stället — den omtolkar aldrig innehållet.
+  extra_alt=""
+  if [ -n "$extra" ]; then
+    extra_alt="|$extra"
+  fi
+  permissions_json="${permissions_json%%__EXTRA__*}${extra_alt}${permissions_json#*__EXTRA__}"
 
   curl -sf -u "$AUTH" -X PUT "$API/permissions/%2F/$name" \
     -H "Content-Type: application/json" \
@@ -140,7 +168,9 @@ create_user() {
 }
 
 create_user "auth" "${AUTH_RABBITMQ_PASSWORD}"
-create_user "billing" "${BILLING_RABBITMQ_PASSWORD}"
+# events\\.dlq (redan JSON/regex-escapad): fas 7, GET /internal/ops/alerts
+# behöver en passiv queue.declare mot dead-letter-kön — se create_user ovan.
+create_user "billing" "${BILLING_RABBITMQ_PASSWORD}" 'events\\.dlq'
 create_user "payments" "${PAYMENTS_RABBITMQ_PASSWORD}"
 create_user "documents" "${DOCUMENTS_RABBITMQ_PASSWORD}"
 
