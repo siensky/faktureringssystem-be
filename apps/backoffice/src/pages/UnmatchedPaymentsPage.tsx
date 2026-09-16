@@ -1,6 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useRef, useState } from "react";
-import { ApiError } from "../api/client";
 import * as paymentsApi from "../api/payments";
 import { formatSEK } from "../lib/money";
 
@@ -48,7 +47,7 @@ export function UnmatchedPaymentsPage() {
     onError: (err, id) =>
       setErrors((prev) => ({
         ...prev,
-        [id]: err instanceof ApiError ? err.message : "Något gick fel",
+        [id]: err instanceof Error ? err.message : "Något gick fel",
       })),
   });
 
@@ -62,7 +61,7 @@ export function UnmatchedPaymentsPage() {
     onError: (err, id) =>
       setErrors((prev) => ({
         ...prev,
-        [id]: err instanceof ApiError ? err.message : "Något gick fel",
+        [id]: err instanceof Error ? err.message : "Något gick fel",
       })),
   });
 

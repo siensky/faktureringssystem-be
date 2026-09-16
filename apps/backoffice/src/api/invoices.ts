@@ -6,6 +6,7 @@ import type {
   InvoiceSummaryDto,
   UpdateInvoiceInput,
 } from "@faktura/contracts";
+import { PAGE_SIZE } from "../lib/pagination";
 import { apiRequest } from "./client";
 
 export interface InvoiceListResponse {
@@ -13,14 +14,18 @@ export interface InvoiceListResponse {
   hasMore: boolean;
 }
 
-export function listInvoices(status?: InvoiceStatus): Promise<InvoiceListResponse> {
-  const query = status ? `?status=${status}&limit=200` : "?limit=200";
-  return apiRequest(`/admin/invoices${query}`);
+function listQuery(status: string | undefined, offset: number): string {
+  const params = new URLSearchParams({ limit: String(PAGE_SIZE), offset: String(offset) });
+  if (status) params.set("status", status);
+  return params.toString();
 }
 
-export function listDeliveries(status?: DeliveryStatus): Promise<InvoiceListResponse> {
-  const query = status ? `?status=${status}&limit=200` : "?limit=200";
-  return apiRequest(`/admin/deliveries${query}`);
+export function listInvoices(status?: InvoiceStatus, offset = 0): Promise<InvoiceListResponse> {
+  return apiRequest(`/admin/invoices?${listQuery(status, offset)}`);
+}
+
+export function listDeliveries(status?: DeliveryStatus, offset = 0): Promise<InvoiceListResponse> {
+  return apiRequest(`/admin/deliveries?${listQuery(status, offset)}`);
 }
 
 export function getInvoice(id: number): Promise<InvoiceDetailDto> {

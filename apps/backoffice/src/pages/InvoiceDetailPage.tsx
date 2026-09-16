@@ -1,13 +1,25 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
-import { ApiError } from "../api/client";
 import * as invoicesApi from "../api/invoices";
 import { StatusBadge } from "../components/StatusBadge";
 import { toDateOnly } from "../lib/date";
 import { formatSEK } from "../lib/money";
 
-const CREDITABLE = new Set(["sent", "overdue", "paid"]);
+const CREDITABLE_STATUSES = new Set(["sent", "overdue", "paid"]);
+
+// Bara vanliga fakturor kan krediteras — services/billing/src/invoices/
+// services.ts kastar Conflict("Bara vanliga fakturor kan krediteras") annars.
+// Påminnelser skapas direkt i status 'sent' (samma services.ts), så utan
+// den här kontrollen visas en "Kreditera"-knapp som garanterat 409:ar.
+function isCreditable(invoice: { status: string; invoiceType: string }): boolean {
+  return CREDITABLE_STATUSES.has(invoice.status) && invoice.invoiceType === "invoice";
+}
+
+const INVOICE_TYPE_LABELS: Record<string, string> = {
+  credit_note: "Kreditfaktura",
+  reminder: "Påminnelse",
+};
 
 export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -33,7 +45,7 @@ export function InvoiceDetailPage() {
   const sendMutation = useMutation({
     mutationFn: () => invoicesApi.sendInvoice(invoiceId, sendKey),
     onSuccess: invalidate,
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   const creditMutation = useMutation({
@@ -42,7 +54,7 @@ export function InvoiceDetailPage() {
       invalidate();
       navigate(`/invoices/${creditNote.id}`);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   const deleteMutation = useMutation({
@@ -51,7 +63,7 @@ export function InvoiceDetailPage() {
       invalidate();
       navigate("/invoices");
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   if (isLoading || !invoice) {
@@ -64,6 +76,11 @@ export function InvoiceDetailPage() {
         <div>
           <h1 className="text-xl font-semibold">
             {invoice.invoiceNumber ? `Faktura ${invoice.invoiceNumber}` : `Utkast #${invoice.id}`}
+            {INVOICE_TYPE_LABELS[invoice.invoiceType] && (
+              <span className="ml-2 text-base font-normal text-slate-500">
+                ({INVOICE_TYPE_LABELS[invoice.invoiceType]})
+              </span>
+            )}
           </h1>
           <p className="text-sm text-slate-500">{invoice.customerName}</p>
         </div>
@@ -74,6 +91,35 @@ export function InvoiceDetailPage() {
       </div>
 
       {error && <p className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
+
+      {(invoice.remindsInvoiceId || invoice.supersededByInvoiceId || invoice.creditsInvoiceId) && (
+        <div className="mb-6 flex flex-col gap-1 text-sm text-slate-500">
+          {invoice.remindsInvoiceId && (
+            <span>
+              Påminner om{" "}
+              <Link to={`/invoices/${invoice.remindsInvoiceId}`} className="underline">
+                faktura #{invoice.remindsInvoiceId}
+              </Link>
+            </span>
+          )}
+          {invoice.supersededByInvoiceId && (
+            <span>
+              Ersatt av{" "}
+              <Link to={`/invoices/${invoice.supersededByInvoiceId}`} className="underline">
+                faktura #{invoice.supersededByInvoiceId}
+              </Link>
+            </span>
+          )}
+          {invoice.creditsInvoiceId && (
+            <span>
+              Krediterar{" "}
+              <Link to={`/invoices/${invoice.creditsInvoiceId}`} className="underline">
+                faktura #{invoice.creditsInvoiceId}
+              </Link>
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="mb-6 flex flex-wrap gap-3">
         {invoice.status === "draft" && (
@@ -103,7 +149,7 @@ export function InvoiceDetailPage() {
             </button>
           </>
         )}
-        {CREDITABLE.has(invoice.status) && (
+        {isCreditable(invoice) && (
           <button
             type="button"
             onClick={() => {

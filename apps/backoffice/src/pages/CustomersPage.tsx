@@ -1,9 +1,9 @@
 import type { CreateCustomerInput, CustomerType } from "@faktura/contracts";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useState } from "react";
 import { Link } from "react-router-dom";
-import { ApiError } from "../api/client";
 import * as customersApi from "../api/customers";
+import { useOffsetList } from "../lib/useOffsetList";
 
 const EMPTY_FORM = {
   customerType: "company" as CustomerType,
@@ -18,15 +18,16 @@ const EMPTY_FORM = {
 
 export function CustomersPage() {
   const queryClient = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ["customers"],
-    queryFn: customersApi.listCustomers,
-  });
+  const { items, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useOffsetList(
+    ["customers"],
+    (offset) => customersApi.listCustomers(offset),
+  );
 
   const [isFormOpen, setIsFormOpen] = useState(false);
   const [idempotencyKey, setIdempotencyKey] = useState("");
   const [form, setForm] = useState(EMPTY_FORM);
   const [error, setError] = useState<string | null>(null);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const createMutation = useMutation({
     mutationFn: (input: CreateCustomerInput) => customersApi.createCustomer(input, idempotencyKey),
@@ -36,13 +37,16 @@ export function CustomersPage() {
       setForm(EMPTY_FORM);
       setError(null);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   const deleteMutation = useMutation({
     mutationFn: (id: number) => customersApi.deleteCustomer(id),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["customers"] }),
-    onError: (err) => window.alert(err instanceof ApiError ? err.message : "Något gick fel"),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["customers"] });
+      setDeleteError(null);
+    },
+    onError: (err) => setDeleteError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   function openForm() {
@@ -81,6 +85,10 @@ export function CustomersPage() {
           Ny kund
         </button>
       </div>
+
+      {deleteError && (
+        <p className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{deleteError}</p>
+      )}
 
       {isFormOpen && (
         <form
@@ -203,7 +211,7 @@ export function CustomersPage() {
                 </td>
               </tr>
             )}
-            {data?.items.map((customer) => (
+            {items.map((customer) => (
               <tr key={customer.id} className="border-b border-slate-100 last:border-0">
                 <td className="px-4 py-3">{customer.name}</td>
                 <td className="px-4 py-3">
@@ -242,6 +250,16 @@ export function CustomersPage() {
           </tbody>
         </table>
       </div>
+      {hasNextPage && (
+        <button
+          type="button"
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+          className="mt-4 rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+        >
+          {isFetchingNextPage ? "Laddar…" : "Ladda fler"}
+        </button>
+      )}
     </div>
   );
 }

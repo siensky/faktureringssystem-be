@@ -1,11 +1,11 @@
 import type { InvoiceStatus } from "@faktura/contracts";
-import { useQuery } from "@tanstack/react-query";
 import { useState } from "react";
 import { Link } from "react-router-dom";
 import * as invoicesApi from "../api/invoices";
 import { StatusBadge } from "../components/StatusBadge";
 import { toDateOnly } from "../lib/date";
 import { formatSEK } from "../lib/money";
+import { useOffsetList } from "../lib/useOffsetList";
 
 const STATUSES: InvoiceStatus[] = [
   "draft",
@@ -20,10 +20,10 @@ const STATUSES: InvoiceStatus[] = [
 export function InvoicesPage() {
   const [status, setStatus] = useState<InvoiceStatus | "">("");
 
-  const { data, isLoading } = useQuery({
-    queryKey: ["invoices", status],
-    queryFn: () => invoicesApi.listInvoices(status || undefined),
-  });
+  const { items, isLoading, hasNextPage, isFetchingNextPage, fetchNextPage } = useOffsetList(
+    ["invoices", status],
+    (offset) => invoicesApi.listInvoices(status || undefined, offset),
+  );
 
   return (
     <div>
@@ -71,7 +71,7 @@ export function InvoicesPage() {
                 </td>
               </tr>
             )}
-            {data?.items.map((invoice) => (
+            {items.map((invoice) => (
               <tr key={invoice.id} className="border-b border-slate-100 last:border-0">
                 <td className="px-4 py-3">
                   <Link to={`/invoices/${invoice.id}`} className="text-slate-900 underline">
@@ -92,6 +92,16 @@ export function InvoicesPage() {
           </tbody>
         </table>
       </div>
+      {hasNextPage && (
+        <button
+          type="button"
+          onClick={() => fetchNextPage()}
+          disabled={isFetchingNextPage}
+          className="mt-4 rounded border border-slate-300 px-4 py-2 text-sm disabled:opacity-50"
+        >
+          {isFetchingNextPage ? "Laddar…" : "Ladda fler"}
+        </button>
+      )}
     </div>
   );
 }

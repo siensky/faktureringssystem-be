@@ -48,7 +48,7 @@ function rawRequest(path: string, opts: RequestOptions): Promise<Response> {
   });
 }
 
-async function tryRefresh(): Promise<boolean> {
+async function doRefresh(): Promise<boolean> {
   const refreshToken = getRefreshToken();
   if (!refreshToken) return false;
   const res = await fetch(`${API_BASE_URL}/auth/refresh`, {
@@ -61,6 +61,23 @@ async function tryRefresh(): Promise<boolean> {
   setAccessToken(data.accessToken);
   setRefreshToken(data.refreshToken);
   return true;
+}
+
+// Refresh-token är engångs och roterande (auth/services.ts: refresh()) — ett
+// återanvänt token avslutar ALLA sessionens tokens ("Token återanvänt —
+// alla sessioner avslutade"). Flera samtidiga 401:or (t.ex. två useQuery
+// som går ut på access-token samtidigt) FÅR DÄRFÖR ALDRIG anropa
+// /auth/refresh var för sig — de måste dela samma in-flight-promise så
+// bara ETT anrop någonsin skickar ett givet refresh-token.
+let refreshPromise: Promise<boolean> | null = null;
+
+function tryRefresh(): Promise<boolean> {
+  if (!refreshPromise) {
+    refreshPromise = doRefresh().finally(() => {
+      refreshPromise = null;
+    });
+  }
+  return refreshPromise;
 }
 
 export async function apiRequest<T>(path: string, opts: RequestOptions = {}): Promise<T> {

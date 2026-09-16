@@ -2,13 +2,20 @@ import type { LineInputDto, VatRate } from "@faktura/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ApiError } from "../api/client";
 import * as customersApi from "../api/customers";
 import * as invoicesApi from "../api/invoices";
 import { toDateOnly } from "../lib/date";
 import { formatSEK, kronorToOre } from "../lib/money";
+import { computeLineOre } from "../lib/vat";
 
 const VAT_RATES: VatRate[] = [0, 6, 12, 25];
+// Speglar services/billing/src/invoices/schema.ts:s createInvoiceBody-gränser
+// (quantity: exclusiveMinimum 0, maximum 100_000; unitPriceOre: max 100_000_000
+// öre = 1 000 000 kr) — annars kan admin mata in värden som ser giltiga ut i
+// live-summeringen men 400:ar på POST.
+const MIN_QUANTITY = 0.001;
+const MAX_QUANTITY = 100_000;
+const MAX_UNIT_PRICE_KRONOR = 1_000_000;
 
 interface LineForm {
   description: string;
@@ -26,12 +33,11 @@ const EMPTY_LINE: LineForm = {
   unit: "",
 };
 
-function lineAmounts(line: LineForm) {
+/** Speglar services/billing/src/domain/vat.ts (öre, avrundning per rad). */
+function lineAmountsOre(line: LineForm) {
   const quantity = Number.parseFloat(line.quantity) || 0;
-  const unitPrice = Number.parseFloat(line.unitPrice) || 0;
-  const exclVat = quantity * unitPrice;
-  const vat = exclVat * (line.vatRate / 100);
-  return { exclVat, vat, inclVat: exclVat + vat };
+  const unitPriceOre = kronorToOre(Number.parseFloat(line.unitPrice) || 0);
+  return computeLineOre(quantity, unitPriceOre, line.vatRate);
 }
 
 export function InvoiceFormPage() {
@@ -43,7 +49,7 @@ export function InvoiceFormPage() {
 
   const { data: customers } = useQuery({
     queryKey: ["customers"],
-    queryFn: customersApi.listCustomers,
+    queryFn: () => customersApi.listCustomers(),
   });
   const { data: existing } = useQuery({
     queryKey: ["invoices", invoiceId],
@@ -107,7 +113,7 @@ export function InvoiceFormPage() {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       navigate(`/invoices/${invoice.id}`);
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   function updateLine(index: number, patch: Partial<LineForm>) {
@@ -127,16 +133,19 @@ export function InvoiceFormPage() {
     saveMutation.mutate();
   }
 
-  const totals = lines.reduce(
+  // Summeras i öre (heltal) — precis som backend — och konverteras till
+  // kronor bara för visning, sist. Att summera redan öre-till-kronor-
+  // konverterade flyttal här skulle kunna introducera ny avrundningsdrift.
+  const totalsOre = lines.reduce(
     (acc, line) => {
-      const amounts = lineAmounts(line);
+      const ore = lineAmountsOre(line);
       return {
-        exclVat: acc.exclVat + amounts.exclVat,
-        vat: acc.vat + amounts.vat,
-        inclVat: acc.inclVat + amounts.inclVat,
+        exclVatOre: acc.exclVatOre + ore.lineExclVatOre,
+        vatOre: acc.vatOre + ore.lineVatOre,
+        inclVatOre: acc.inclVatOre + ore.lineInclVatOre,
       };
     },
-    { exclVat: 0, vat: 0, inclVat: 0 },
+    { exclVatOre: 0, vatOre: 0, inclVatOre: 0 },
   );
 
   return (
@@ -218,7 +227,8 @@ export function InvoiceFormPage() {
                   <input
                     type="number"
                     step="0.001"
-                    min="0"
+                    min={MIN_QUANTITY}
+                    max={MAX_QUANTITY}
                     required
                     value={line.quantity}
                     onChange={(e) => updateLine(index, { quantity: e.target.value })}
@@ -238,6 +248,7 @@ export function InvoiceFormPage() {
                     type="number"
                     step="0.01"
                     min="0"
+                    max={MAX_UNIT_PRICE_KRONOR}
                     required
                     value={line.unitPrice}
                     onChange={(e) => updateLine(index, { unitPrice: e.target.value })}
@@ -259,7 +270,9 @@ export function InvoiceFormPage() {
                     ))}
                   </select>
                 </td>
-                <td className="py-2 pr-2 text-right">{formatSEK(lineAmounts(line).inclVat)}</td>
+                <td className="py-2 pr-2 text-right">
+                  {formatSEK(lineAmountsOre(line).lineInclVatOre / 100)}
+                </td>
                 <td className="py-2 text-right">
                   {lines.length > 1 && (
                     <button
@@ -284,15 +297,15 @@ export function InvoiceFormPage() {
           <div className="w-64 text-sm">
             <div className="flex justify-between py-1 text-slate-500">
               <span>Summa exkl. moms</span>
-              <span>{formatSEK(totals.exclVat)}</span>
+              <span>{formatSEK(totalsOre.exclVatOre / 100)}</span>
             </div>
             <div className="flex justify-between py-1 text-slate-500">
               <span>Moms</span>
-              <span>{formatSEK(totals.vat)}</span>
+              <span>{formatSEK(totalsOre.vatOre / 100)}</span>
             </div>
             <div className="flex justify-between border-t border-slate-200 py-1 font-medium">
               <span>Att betala</span>
-              <span>{formatSEK(totals.inclVat)}</span>
+              <span>{formatSEK(totalsOre.inclVatOre / 100)}</span>
             </div>
           </div>
         </div>

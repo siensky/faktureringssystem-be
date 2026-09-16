@@ -1,4 +1,5 @@
 import type { CreateCustomerInput, CustomerDto, UpdateCustomerInput } from "@faktura/contracts";
+import { PAGE_SIZE } from "../lib/pagination";
 import { apiRequest } from "./client";
 
 export interface CustomerListResponse {
@@ -6,8 +7,8 @@ export interface CustomerListResponse {
   hasMore: boolean;
 }
 
-export function listCustomers(): Promise<CustomerListResponse> {
-  return apiRequest("/admin/customers?limit=200");
+export function listCustomers(offset = 0): Promise<CustomerListResponse> {
+  return apiRequest(`/admin/customers?limit=${PAGE_SIZE}&offset=${offset}`);
 }
 
 export function getCustomer(id: number): Promise<CustomerDto> {

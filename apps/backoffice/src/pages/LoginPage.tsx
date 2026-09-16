@@ -1,6 +1,5 @@
 import { type FormEvent, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ApiError } from "../api/client";
 import { useAuth } from "../auth/AuthContext";
 
 export function LoginPage() {
@@ -19,7 +18,7 @@ export function LoginPage() {
       await login(email, password);
       navigate("/invoices", { replace: true });
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : "Något gick fel");
+      setError(err instanceof Error ? err.message : "Något gick fel");
     } finally {
       setIsSubmitting(false);
     }

@@ -2,7 +2,6 @@ import type { UpdateCustomerInput } from "@faktura/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ApiError } from "../api/client";
 import * as customersApi from "../api/customers";
 
 export function CustomerEditPage() {
@@ -46,7 +45,7 @@ export function CustomerEditPage() {
       queryClient.invalidateQueries({ queryKey: ["customers"] });
       navigate("/customers");
     },
-    onError: (err) => setError(err instanceof ApiError ? err.message : "Något gick fel"),
+    onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
   });
 
   function handleSubmit(event: FormEvent) {
