@@ -94,10 +94,14 @@ export const up = (pgm) => {
     -- en utgången nyckel är död för alla tjänster lika (samma resonemang
     -- som automation/repository.ts:s cleanupExpiredIdempotencyKeys).
     -- billing äger POST /admin/invoices m.fl. och det dagliga städjobbet;
-    -- payments äger POST /admin/payments/:id/match. auth och documents
-    -- har ingen Idempotency-Key-skyddad endpoint.
-    GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO billing;
-    GRANT SELECT, INSERT, UPDATE ON idempotency_keys TO payments;
+    -- payments äger POST /admin/payments/:id/match. Båda behöver DELETE:
+    -- inte bara billings nattliga städning, utan ÄVEN payments/billings
+    -- egen felstädning (withIdempotency/idempotency.ts) som tar bort ett
+    -- 'in_progress'-anspråk direkt om själva arbetet kastar, i stället för
+    -- att låta klienten vänta ut hela stale-fönstret (kodgranskning PR #7,
+    -- fynd 1 — missades först här, fångades i en andra granskning).
+    -- auth och documents har ingen Idempotency-Key-skyddad endpoint.
+    GRANT SELECT, INSERT, UPDATE, DELETE ON idempotency_keys TO billing, payments;
 
     -- ── audit_log: append-only DATABASGARANTI (migrations/0003_shared.js).
     -- INSERT och INGET annat, av någon roll. documents skriver aldrig hit.

@@ -9,22 +9,34 @@
 //      EGEN drift-endpoint, ALDRIG en direkt DB-läsning över
 //      tjänstegränsen (architecture.md #2)
 //
-// Var för sig, inte Promise.all: en enskild trasig kontroll (t.ex.
-// payments nere) ska synas som ETT fel i svaret, inte dölja de andra två
-// eller få hela endpointen att 500:a.
+// Själva kontrollerna (rena, testbara) bor i checks.ts — den här filen är
+// bara ledningsdragningen till riktig I/O (RabbitMQ, Postgres, S2S-HTTP).
+//
+// Promise.allSettled är ett ANDRA skyddslager, inte det första
+// (kodgranskning PR #7, fynd 2): checks.ts:s tre funktioner fångar redan
+// sina egna fel och kan aldrig avvisa sitt löfte — det är DEN garantin som
+// gör att en trasig kontroll syns som ETT fel i svaret. allSettled är ett
+// strukturellt säkerhetsnät ifall en framtida ändring tar bort ett inre
+// try/catch i tron att resten av kedjan ändå skyddar.
 
 import { checkQueueDepth, getServiceToken } from "@faktura/shared";
 import type { ChannelModel } from "amqplib";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { config } from "../config";
+import {
+  checkDeadLetterQueue,
+  checkOutboxDeadLetters,
+  checkUnmatchedTransactions,
+  errorMessage,
+} from "./checks";
 import { countOutboxDeadLettersBySource } from "./repository";
 import type { AlertsSummary } from "./types";
 
 const DEAD_LETTER_QUEUE = "events.dlq";
 
-function errorMessage(error: unknown): string {
-  return error instanceof Error ? error.message : String(error);
+function fromSettled<T>(result: PromiseSettledResult<T>, onRejected: (message: string) => T): T {
+  return result.status === "fulfilled" ? result.value : onRejected(errorMessage(result.reason));
 }
 
 export function createAlertsService(deps: {
@@ -34,57 +46,38 @@ export function createAlertsService(deps: {
 }) {
   const { sql, rabbitConnection, redis } = deps;
 
-  async function deadLetterQueue(): Promise<AlertsSummary["deadLetterQueue"]> {
-    try {
-      return { depth: await checkQueueDepth(rabbitConnection, DEAD_LETTER_QUEUE) };
-    } catch (error) {
-      return { depth: 0, error: errorMessage(error) };
-    }
-  }
-
-  async function outboxDeadLetters(): Promise<AlertsSummary["outboxDeadLetters"]> {
-    try {
-      const rows = await countOutboxDeadLettersBySource(sql);
-      const bySourceService: Record<string, number> = {};
-      let count = 0;
-      for (const row of rows) {
-        bySourceService[row.source_service] = row.n;
-        count += row.n;
-      }
-      return { count, bySourceService };
-    } catch (error) {
-      return { count: 0, bySourceService: {}, error: errorMessage(error) };
-    }
-  }
-
-  async function unmatchedTransactions(): Promise<AlertsSummary["unmatchedTransactions"]> {
-    try {
-      const token = await getServiceToken({
-        authBaseUrl: config.authBaseUrl,
-        clientId: config.billingClientId,
-        clientSecret: config.billingClientSecret,
-        redis,
-        scopes: config.billingClientScopes,
-      });
-      const res = await fetch(`${config.paymentsBaseUrl}/internal/ops/payments/unknown-bankgiro`, {
-        headers: { authorization: `Bearer ${token}` },
-      });
-      if (!res.ok) throw new Error(`payments svarade ${res.status}`);
-      const body = (await res.json()) as { count: number };
-      return { count: body.count };
-    } catch (error) {
-      return { count: 0, error: errorMessage(error) };
-    }
+  async function fetchUnmatchedCount(): Promise<number> {
+    const token = await getServiceToken({
+      authBaseUrl: config.authBaseUrl,
+      clientId: config.billingClientId,
+      clientSecret: config.billingClientSecret,
+      redis,
+      scopes: config.billingClientScopes,
+    });
+    const res = await fetch(`${config.paymentsBaseUrl}/internal/ops/payments/unknown-bankgiro`, {
+      headers: { authorization: `Bearer ${token}` },
+    });
+    if (!res.ok) throw new Error(`payments svarade ${res.status}`);
+    const body = (await res.json()) as { count: number };
+    return body.count;
   }
 
   return {
     async getAlerts(): Promise<AlertsSummary> {
-      const [dlq, outbox, unmatched] = await Promise.all([
-        deadLetterQueue(),
-        outboxDeadLetters(),
-        unmatchedTransactions(),
+      const [dlq, outbox, unmatched] = await Promise.allSettled([
+        checkDeadLetterQueue(() => checkQueueDepth(rabbitConnection, DEAD_LETTER_QUEUE)),
+        checkOutboxDeadLetters(() => countOutboxDeadLettersBySource(sql)),
+        checkUnmatchedTransactions(fetchUnmatchedCount),
       ]);
-      return { deadLetterQueue: dlq, outboxDeadLetters: outbox, unmatchedTransactions: unmatched };
+      return {
+        deadLetterQueue: fromSettled(dlq, (error) => ({ depth: 0, error })),
+        outboxDeadLetters: fromSettled(outbox, (error) => ({
+          count: 0,
+          bySourceService: {},
+          error,
+        })),
+        unmatchedTransactions: fromSettled(unmatched, (error) => ({ count: 0, error })),
+      };
     },
   };
 }

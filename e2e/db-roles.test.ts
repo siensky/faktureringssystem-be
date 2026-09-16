@@ -7,7 +7,7 @@
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import postgres from "postgres";
-import { PAYMENTS_DB_URL } from "./helpers";
+import { DB_URL, PAYMENTS_DB_URL, newOrgNumber, uniq } from "./helpers";
 
 const RUN = !!process.env.RUN_E2E;
 
@@ -17,13 +17,25 @@ const INSUFFICIENT_PRIVILEGE = "42501";
 
 describe.skipIf(!RUN)("fas 7 e2e — Postgres-roller (härdning)", () => {
   let sql: ReturnType<typeof postgres>;
+  // Superuser-anslutning, bara för att sätta upp/riva en tenant-rad —
+  // payments-rollen kan (medvetet) inte skriva i tenants själv.
+  let adminSql: ReturnType<typeof postgres>;
+  let tenantId: number;
 
-  beforeAll(() => {
+  beforeAll(async () => {
     sql = postgres(PAYMENTS_DB_URL, { max: 1 });
+    adminSql = postgres(DB_URL, { max: 1 });
+    const [row] = await adminSql<{ id: number }[]>`
+      INSERT INTO tenants (name, org_number) VALUES (${`E2E db-roles ${uniq()}`}, ${newOrgNumber()})
+      RETURNING id
+    `;
+    tenantId = row!.id;
   });
 
   afterAll(async () => {
+    await adminSql`DELETE FROM tenants WHERE id = ${tenantId}`;
     await sql.end();
+    await adminSql.end();
   });
 
   test("payments-rollen kan koppla upp och läsa/skriva sin EGEN tabell (bank_transactions)", async () => {
@@ -76,5 +88,23 @@ describe.skipIf(!RUN)("fas 7 e2e — Postgres-roller (härdning)", () => {
     }
     expect(error).toBeDefined();
     expect((error as { code?: string }).code).toBe(INSUFFICIENT_PRIVILEGE);
+  });
+
+  // Kodgranskning PR #7, fynd 1: payments EGEN felstädning
+  // (services/payments/src/idempotency.ts) gör en DELETE på ett
+  // 'in_progress'-anspråk när själva arbetet kastar — missad i den
+  // ursprungliga GRANT-motiveringen (som bara nämnde SELECT/INSERT/UPDATE
+  // för /admin/payments/:id/match). Positiv test, inte bara "inget fel":
+  // bevisar att raden verkligen försvinner, inte att DELETE:en tystnar.
+  test("payments-rollen kan DELETE:a sitt eget 'in_progress'-anspråk i idempotency_keys (felstädning)", async () => {
+    const key = `db-roles-e2e-${uniq()}`;
+    await sql`
+      INSERT INTO idempotency_keys (tenant_id, key, endpoint, request_hash, state, expires_at)
+      VALUES (${tenantId}, ${key}, '/test', 'hash', 'in_progress', now() + interval '1 hour')
+    `;
+    const deleted = await sql`
+      DELETE FROM idempotency_keys WHERE tenant_id = ${tenantId} AND key = ${key} AND state = 'in_progress'
+    `;
+    expect(deleted.count).toBe(1);
   });
 });

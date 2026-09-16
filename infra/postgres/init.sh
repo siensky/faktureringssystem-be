@@ -23,8 +23,19 @@ set -eu
 alter_password() {
   role="$1"
   password="$2"
-  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q \
-    -c "ALTER ROLE \"$role\" WITH LOGIN PASSWORD '$password';"
+  # :'pass' är psqls egen variabelinterpolation för en SQL-strängliteral —
+  # den escapar en enkelcitat i lösenordet korrekt, så ett roterat lösenord
+  # som råkar innehålla en enkelcitat inte bryter satsen (kodgranskning PR
+  # #7, fynd 4 — inte en säkerhetslucka, lösenorden är operatörskontrollerade
+  # och inte klientdata, men en självförvållad skörhet som inte behövs).
+  # MÅSTE skickas via stdin (en heredoc), inte -c: psql substituerar bara
+  # :'var' när SQL läses från en fil/stdin, inte i ett -c-argument
+  # (verifierat direkt mot psql 15 — odokumenterat, men beteendet i sig).
+  # Heredocen är OCITERAD så $role interpoleras av skalet (en av fyra
+  # hårdkodade literaler, ofarligt) medan :'pass' lämnas orört till psql.
+  psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -q -v pass="$password" <<SQL
+ALTER ROLE "$role" WITH LOGIN PASSWORD :'pass';
+SQL
   echo "  ✓ $role"
 }
 
