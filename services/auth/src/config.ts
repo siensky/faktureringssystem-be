@@ -41,6 +41,15 @@ const optional = loadEnvWithDefaults({
   CUSTOMER_INVITE_TTL_DAYS: "7",
   AUTH_STRICT_RATE_LIMIT_MAX: "10",
   BANKID_PROVIDER: "mock",
+  // Fas 11: BankIDs egen, publika (icke-hemliga) adress för RP-API v6.1
+  // mot testmiljön. Bara relevant när BANKID_PROVIDER=real.
+  BANKID_BASE_URL: "https://appapi2.test.bankid.com/rp/v6.1",
+  // Klientcertifikat (P12) + CA-rot för mutual TLS mot BankID. Filsökvägar,
+  // inte innehållet — certifikaten committas ALDRIG (git.md #9). Tomma i
+  // mock-läge.
+  BANKID_CERT_PATH: "",
+  BANKID_CERT_PASSPHRASE: "",
+  BANKID_CA_PATH: "",
   // Minsta möjliga scope (architecture.md #18): auth anropar bara
   // GET /internal/customers/:id.
   AUTH_CLIENT_SCOPES: "billing:customer:read",
@@ -79,6 +88,10 @@ export const config = {
     optional.AUTH_STRICT_RATE_LIMIT_MAX,
   ),
   bankIdProvider: optional.BANKID_PROVIDER,
+  bankIdBaseUrl: trimTrailingSlash(optional.BANKID_BASE_URL),
+  bankIdCertPath: optional.BANKID_CERT_PATH,
+  bankIdCertPassphrase: optional.BANKID_CERT_PASSPHRASE,
+  bankIdCaPath: optional.BANKID_CA_PATH,
   billingBaseUrl: trimTrailingSlash(required.BILLING_BASE_URL),
   authBaseUrl: trimTrailingSlash(required.AUTH_BASE_URL),
   authClientId: required.AUTH_CLIENT_ID,
@@ -88,11 +101,17 @@ export const config = {
 
 // BankID-mocken tar personnumret ur request-bodyn och returnerar det som
 // signerat — total auth-bypass. Den får ALDRIG köras i produktion. Samma
-// disciplin som dev-endpoints. RealBankIdProvider byggs i fas 11.
+// disciplin som dev-endpoints.
 if (config.isProduction && config.bankIdProvider !== "real") {
   throw new Error(
     "BANKID_PROVIDER måste vara 'real' i produktion — mocken är en total auth-bypass",
   );
+}
+// "real" utan certifikat kan aldrig fungera, oavsett miljö — kraschar
+// direkt i stället för att falla på första BankID-inloggningen (samma
+// disciplin som STRIPE_PROVIDER=real i services/payments/src/config.ts).
+if (config.bankIdProvider === "real" && (!config.bankIdCertPath || !config.bankIdCaPath)) {
+  throw new Error("BANKID_CERT_PATH och BANKID_CA_PATH krävs när BANKID_PROVIDER=real");
 }
 
 export const SERVICE_NAME = "auth";

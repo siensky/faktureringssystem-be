@@ -35,11 +35,9 @@ export function createBankIdService(deps: Deps) {
         deps.redis,
         `bankid-init:pnr:${hmacField(normalizePnr(personalNumber), deps.config.pnrHmacKey)}`,
       );
-      const { orderRef, autoStartToken, qrData } = await deps.provider.init({
-        personalNumber,
-        endUserIp,
-      });
-      return { orderRef, autoStartToken, qrData };
+      const { orderRef, autoStartToken, qrStartToken, qrStartSecret, qrStartedAt } =
+        await deps.provider.init({ personalNumber, endUserIp });
+      return { orderRef, autoStartToken, qrStartToken, qrStartSecret, qrStartedAt };
     },
 
     async collect(orderRef: string) {
