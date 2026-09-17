@@ -18,6 +18,11 @@ export function createPortalControllers(service: PortalService) {
       return reply.send(await service.getPdfUrl(contextOf(request), request.params.id));
     },
 
+    async pay(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {
+      const result = await service.pay(contextOf(request), request.params.id);
+      return reply.status(201).send(result);
+    },
+
     async accountSummary(request: FastifyRequest, reply: FastifyReply) {
       return reply.send(await service.accountSummary(contextOf(request)));
     },

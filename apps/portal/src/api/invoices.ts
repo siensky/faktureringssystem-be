@@ -3,6 +3,7 @@ import type {
   PortalInvoiceDetailDto,
   PortalInvoicePdfDto,
   PortalInvoiceSummaryDto,
+  PortalPaymentSessionDto,
 } from "@faktura/contracts";
 import { apiRequest } from "./client";
 
@@ -26,4 +27,10 @@ export function getInvoicePdfUrl(id: number): Promise<PortalInvoicePdfDto> {
 
 export function getAccountSummary(): Promise<PortalAccountSummaryDto> {
   return apiRequest("/portal/account-summary");
+}
+
+/** Ingen body — servern räknar fram beloppet ur den levande fakturan
+ *  (domain.md #27), inget för klienten att skicka med. */
+export function payInvoice(id: number): Promise<PortalPaymentSessionDto> {
+  return apiRequest(`/portal/invoices/${id}/pay`, { method: "POST", body: {} });
 }

@@ -174,11 +174,15 @@ jobs:
           BILLING_OPS_CLIENT_SCOPES=billing:ops:run
           BILLING_CLIENT_ID=svc-billing
           BILLING_CLIENT_SECRET=ci_billing_client_secret_not_a_real_secret_000
-          BILLING_CLIENT_SCOPES=payments:ops:read documents:pdf:read
+          BILLING_CLIENT_SCOPES=payments:ops:read documents:pdf:read payments:stripe:checkout
           AUTH_CLIENT_ID=svc-auth
           AUTH_CLIENT_SECRET=ci_auth_client_secret_not_a_real_secret_000000
           AUTH_CLIENT_SCOPES=billing:customer:read
           CUSTOMER_INVITE_TTL_DAYS=7
+          STRIPE_PROVIDER=mock
+          STRIPE_SECRET_KEY=
+          STRIPE_WEBHOOK_SECRET=ci_stripe_webhook_secret_not_a_real_secret_0000
+          PORTAL_BASE_URL=http://localhost:5174
           ENVEOF
 
       - name: Bygg alla images
@@ -246,6 +250,11 @@ jobs:
           E2E_PAYMENT_WEBHOOK_SECRET: ci_payment_webhook_secret_not_a_real_secret_00
           E2E_DOCUMENTS_CLIENT_ID: svc-documents
           E2E_DOCUMENTS_CLIENT_SECRET: ci_documents_client_secret_not_a_real_secret_00
+          # Fas 10: måste vara IDENTISK med payments-tjänstens
+          # STRIPE_WEBHOOK_SECRET ovan — e2e signerar sitt simulerade
+          # Stripe-event med samma hemlighet (services/payments/src/
+          # stripe/signature.ts).
+          E2E_STRIPE_WEBHOOK_SECRET: ci_stripe_webhook_secret_not_a_real_secret_0000
         run: |
           bun install --frozen-lockfile
           bun test --timeout 60000 e2e

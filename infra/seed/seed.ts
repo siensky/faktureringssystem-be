@@ -108,13 +108,17 @@ async function main(): Promise<void> {
       clientSecret: required("BILLING_CLIENT_SECRET"),
       // Minsta möjliga scope (architecture.md #18): GET /internal/ops/alerts
       // anropar payments unknown-bankgiro-driftvy (fas 7); GET /portal/
-      // invoices/:id/pdf anropar documents PDF-URL (fas 9). Samma
-      // klientidentitet, två anropsmål.
-      scopes: (process.env.BILLING_CLIENT_SCOPES ?? "payments:ops:read documents:pdf:read")
+      // invoices/:id/pdf anropar documents PDF-URL (fas 9); POST /portal/
+      // invoices/:id/pay anropar payments Stripe Checkout-sessioner
+      // (fas 10). Samma klientidentitet, tre anropsmål.
+      scopes: (
+        process.env.BILLING_CLIENT_SCOPES ??
+        "payments:ops:read documents:pdf:read payments:stripe:checkout"
+      )
         .split(/\s+/)
         .filter(Boolean),
       description:
-        "billing-tjänsten: payments unknown-bankgiro (fas 7) och documents PDF-URL (fas 9)",
+        "billing-tjänsten: payments unknown-bankgiro (fas 7), documents PDF-URL (fas 9), Stripe Checkout (fas 10)",
     },
     {
       clientId: required("AUTH_CLIENT_ID"),

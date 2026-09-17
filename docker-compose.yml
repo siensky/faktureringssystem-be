@@ -384,6 +384,17 @@ services:
       PAYMENTS_CLIENT_SECRET: ${PAYMENTS_CLIENT_SECRET}
       PAYMENTS_CLIENT_SCOPES: ${PAYMENTS_CLIENT_SCOPES}
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      # Fas 10: portalbetalning via Stripe. STRIPE_PROVIDER=mock i dev/CI
+      # (architecture.md #25, mock-undantaget) — STRIPE_SECRET_KEY behövs
+      # bara i "real"-läget. STRIPE_WEBHOOK_SECRET krävs alltid, mocken
+      # inräknad (services/payments/src/config.ts). PORTAL_BASE_URL
+      # används för success_url/cancel_url på Checkout-sessionen — måste
+      # vara nåbar från KUNDENS webbläsare, inte det interna Docker-nätet
+      # (samma resonemang som S3_PUBLIC_ENDPOINT nedan för documents).
+      STRIPE_PROVIDER: ${STRIPE_PROVIDER:-mock}
+      STRIPE_SECRET_KEY: ${STRIPE_SECRET_KEY:-}
+      STRIPE_WEBHOOK_SECRET: ${STRIPE_WEBHOOK_SECRET}
+      PORTAL_BASE_URL: ${PORTAL_BASE_URL:-http://localhost:5174}
     depends_on:
       db:
         condition: service_healthy

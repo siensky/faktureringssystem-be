@@ -28,6 +28,9 @@ import { registerImportRoutes } from "./import/routes";
 import { createImportService } from "./import/service";
 import { createMatchingService } from "./matching/service";
 import { registerOpsRoutes } from "./ops/routes";
+import { MockStripeProvider, RealStripeProvider } from "./stripe/provider";
+import { registerStripeRoutes } from "./stripe/routes";
+import { createStripeService } from "./stripe/service";
 import { BankTransactionRepository } from "./transactions/repository";
 import { registerWebhookRoutes } from "./webhooks/routes";
 
@@ -71,6 +74,25 @@ startService({
 
     const bankTransactionRepo = new BankTransactionRepository(sql);
     registerOpsRoutes(app, bankTransactionRepo, { requireService });
+
+    // Fas 10: portalbetalning via Stripe. billingClient återanvänds — den
+    // uppfyller redan StripeBillingClient (samma resolveInvoiceById som
+    // den manuella matchningen använder, fas 5).
+    const stripeProvider =
+      config.stripeProvider === "real"
+        ? new RealStripeProvider(config.stripeSecretKey)
+        : new MockStripeProvider();
+    const stripeService = createStripeService({
+      sql,
+      provider: stripeProvider,
+      billingClient,
+      portalBaseUrl: config.portalBaseUrl,
+      logger,
+    });
+    registerStripeRoutes(app, stripeService, {
+      webhookSecret: config.stripeWebhookSecret,
+      requireService,
+    });
 
     const publisher = startOutboxPublisher({
       sql,
