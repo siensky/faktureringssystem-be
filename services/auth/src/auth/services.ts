@@ -5,6 +5,7 @@
 import { randomUUID } from "node:crypto";
 import {
   BadRequest,
+  Conflict,
   Forbidden,
   NotFound,
   USER_TOKEN,
@@ -15,6 +16,7 @@ import type { Logger, RequestContext } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { writeAuditLog } from "../audit";
+import { findCustomer } from "../billing-client";
 import type { config as Config } from "../config";
 import { SERVICE_NAME } from "../config";
 import { writeEvent } from "../outbox";
@@ -23,7 +25,14 @@ import { createSessionIssuer } from "../session";
 import { assertNotLockedOut, clearLoginFailures, recordLoginFailure } from "../throttle";
 import { OK, toCurrentUserView, toTokenPairResponse } from "./mappers";
 import { createAuthRepository } from "./repository";
-import type { LoginInput, RegisterInput, TenantStatus, TokenType } from "./types";
+import type {
+  AcceptCustomerInviteInput,
+  CreateCustomerInviteInput,
+  LoginInput,
+  RegisterInput,
+  TenantStatus,
+  TokenType,
+} from "./types";
 
 interface Deps {
   sql: Sql;
@@ -47,10 +56,11 @@ export function createAuthService(deps: Deps) {
     return dummyHash;
   };
 
-  const ttlFor = (type: TokenType): number =>
-    type === "email_verification"
-      ? config.emailVerificationTtlSeconds
-      : config.passwordResetTtlSeconds;
+  const ttlFor = (type: TokenType): number => {
+    if (type === "email_verification") return config.emailVerificationTtlSeconds;
+    if (type === "customer_invite") return config.customerInviteTtlSeconds;
+    return config.passwordResetTtlSeconds;
+  };
 
   async function issueTokenRow(
     userId: number,
@@ -207,7 +217,12 @@ export function createAuthService(deps: Deps) {
         return issueTokenRow(user.id, user.tenant_id, "refresh", config.refreshTtlSeconds, tx);
       });
       const accessToken = await signAccessToken(
-        { userId: user.id, tenantId: user.tenant_id, role: user.role },
+        {
+          userId: user.id,
+          tenantId: user.tenant_id,
+          role: user.role,
+          ...(user.customer_id != null ? { customerId: user.customer_id } : {}),
+        },
         config.jwtUserSecret,
       );
       return toTokenPairResponse({
@@ -293,6 +308,129 @@ export function createAuthService(deps: Deps) {
       if (!user) throw new NotFound("Ingen användare med den e-posten");
       const token = await issueTokenRow(user.id, user.tenant_id, type, ttlFor(type));
       return { token };
+    },
+
+    /**
+     * Fas 9 — admin-only (route-guardad, se guards.ts). Skapar (eller, om
+     * kunden redan bjudits in men aldrig fullföljt, förnyar) en
+     * kundportal-inloggning. customerId valideras mot billing S2S INNAN
+     * någon rad skrivs — annars kunde en admin gissa sig till ett
+     * customerId hos en annan tenant.
+     */
+    async createCustomerInvite(ctx: RequestContext, input: CreateCustomerInviteInput) {
+      const customer = await findCustomer(redis, ctx.tenantId, input.customerId, ctx.correlationId);
+      if (!customer) throw new NotFound("Kunden finns inte");
+      const email = norm(input.email);
+
+      const existing = await repo.findUserByCustomerId(input.customerId);
+      if (existing) {
+        // email_verified_at sätts av accept-customer-invite (precis som
+        // verify-email för admins) — det ÄR "har fullföljt invite"-flaggan,
+        // ingen egen kolumn behövs.
+        if (existing.email_verified_at) {
+          throw new Conflict("Kunden har redan portal-åtkomst");
+        }
+        try {
+          await sql.begin(async (tx) => {
+            await repo.revokeTokens(tx, existing.id, "customer_invite");
+            // E-posten kan ha rättats sedan förra (ej fullföljda) inbjudan —
+            // skriv den FÄRSKA adressen så länken går till rätt mottagare
+            // (kodgranskning fas 9, fynd 4).
+            await repo.updateEmail(tx, existing.id, email);
+            await issueTokenRow(
+              existing.id,
+              ctx.tenantId,
+              "customer_invite",
+              config.customerInviteTtlSeconds,
+              tx,
+            );
+            await writeAuditLog(tx, {
+              tenantId: ctx.tenantId,
+              actorUserId: ctx.userId,
+              action: "customer.invite_resent",
+              resourceType: "user",
+              resourceId: String(existing.id),
+              correlationId: ctx.correlationId,
+            });
+          });
+        } catch (error) {
+          // 23505 = unique_violation — users_email_unique är GLOBAL (0002_auth.js),
+          // så den nya adressen kan redan tillhöra ett annat konto (en admin i
+          // en annan tenant, eller en redan inbjuden kund). Ett tydligt 409 i
+          // stället för att låta det bli ett okänt fel -> 500 (kodgranskning
+          // fas 9, fynd 3).
+          if ((error as { code?: string }).code === "23505") {
+            throw new Conflict("E-postadressen används redan av ett annat konto");
+          }
+          throw error;
+        }
+        return OK;
+      }
+
+      // Slumpmässig, okänd placeholder — se repository.ts:s kommentar.
+      const passwordHash = await hashPassword(randomUUID());
+      try {
+        await sql.begin(async (tx) => {
+          const { id: userId } = await repo.insertCustomerInviteUser(tx, {
+            tenantId: ctx.tenantId,
+            customerId: input.customerId,
+            email,
+            passwordHash,
+          });
+          await issueTokenRow(
+            userId,
+            ctx.tenantId,
+            "customer_invite",
+            config.customerInviteTtlSeconds,
+            tx,
+          );
+          await writeAuditLog(tx, {
+            tenantId: ctx.tenantId,
+            actorUserId: ctx.userId,
+            action: "customer.invited",
+            resourceType: "user",
+            resourceId: String(userId),
+            correlationId: ctx.correlationId,
+          });
+        });
+      } catch (error) {
+        // Samma 23505-fall som ovan, för en HELT NY inbjudan.
+        if ((error as { code?: string }).code === "23505") {
+          throw new Conflict("E-postadressen används redan av ett annat konto");
+        }
+        throw error;
+      }
+      return OK;
+    },
+
+    /** Publik, engångslänk. Sätter lösenordet och markerar e-posten
+     *  verifierad — precis som verify-email, fast i samma steg som
+     *  lösenordet sätts (kunden bevisar redan att den äger länken). */
+    async acceptCustomerInvite(input: AcceptCustomerInviteInput, correlationId?: string) {
+      const row = await repo.findToken(
+        hashToken(input.token, config.tokenPepper),
+        "customer_invite",
+      );
+      if (!row || row.used_at || row.expires_at.getTime() < Date.now()) {
+        throw new BadRequest("Ogiltig eller utgången inbjudningslänk");
+      }
+      const passwordHash = await hashPassword(input.password);
+      await sql.begin(async (tx) => {
+        if ((await repo.markTokenUsed(tx, row.id)) === 0) {
+          throw new BadRequest("Ogiltig eller utgången inbjudningslänk");
+        }
+        await repo.updatePassword(tx, row.user_id, passwordHash);
+        await repo.setEmailVerified(tx, row.user_id);
+        await writeAuditLog(tx, {
+          tenantId: row.tenant_id,
+          actorUserId: row.user_id,
+          action: "customer.invite_accepted",
+          resourceType: "user",
+          resourceId: String(row.user_id),
+          correlationId,
+        });
+      });
+      return OK;
     },
   };
 }

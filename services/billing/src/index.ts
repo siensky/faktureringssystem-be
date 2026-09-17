@@ -26,11 +26,13 @@ import { createCustomerService } from "./customers/services";
 import { sql } from "./db";
 import { startDeliveryConsumer } from "./deliveries/consumer";
 import { createDeliveryService } from "./deliveries/service";
-import { requireAdmin } from "./guards";
+import { requireAdmin, requireCustomer } from "./guards";
 import { registerInvoiceRoutes } from "./invoices/routes";
 import { createInvoiceService } from "./invoices/services";
 import { startPaymentConsumer } from "./payments/consumer";
 import { createPaymentApplyService } from "./payments/service";
+import { registerPortalRoutes } from "./portal/routes";
+import { createPortalService } from "./portal/services";
 
 const logger = createLogger(SERVICE_NAME);
 
@@ -82,6 +84,8 @@ startService({
     });
     // /admin/* kräver inloggad admin; /internal/* kräver tjänste-token + scope.
     const userChain = [requireUser, requireAdmin];
+    // Fas 9: /portal/* kräver inloggad kund (aldrig en admin).
+    const customerChain = [requireUser, requireCustomer];
 
     const companySettingsService = createCompanySettingsService(sql);
     registerCompanySettingsRoutes(app, companySettingsService, { userChain, requireService });
@@ -95,6 +99,12 @@ startService({
 
     const invoiceService = createInvoiceService(sql);
     registerInvoiceRoutes(app, invoiceService, sql, { userChain, requireService });
+
+    // Fas 9: kundportalen — skrivskyddad läsning av EGNA fakturor
+    // (två lager åtkomstkontroll: tenant OCH customerId, domain.md #32),
+    // plus en S2S-läsning mot documents för PDF-URL:en.
+    const portalService = createPortalService(sql, ctx.redis);
+    registerPortalRoutes(app, portalService, { customerChain });
 
     // Fas 6: dagligt automatiseringsjobb (overdue, påminnelser, återkommande
     // fakturor, städning) kl. 03:00 Europe/Stockholm, plus en skyddad

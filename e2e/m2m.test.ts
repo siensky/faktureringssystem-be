@@ -240,10 +240,19 @@ describe.skipIf(!RUN)("fas 2 e2e — M2M + BankID", () => {
         RETURNING id
       `;
       createdTenantIds.push(tenantId!);
+      // Fas 9: role='customer' kräver users.customer_id (users_customer_shape,
+      // migrations/0009_portal.js) — en portal-inloggning pekar alltid på en
+      // billing-kundrad. Minimal rad direkt via SQL, samma mönster som
+      // tenants-inserten ovan (kaskaderar bort med tenanten).
+      const [{ id: customerId }] = await sql<{ id: number }[]>`
+        INSERT INTO customers (tenant_id, customer_type, name, email, org_number)
+        VALUES (${tenantId}, 'company', 'BankID Test-kund', 'bankid-test@ex.test', '5560000001')
+        RETURNING id
+      `;
       const pnr = `1995${Math.floor(1e7 + Math.random() * 8e7)}`;
       await sql`
-        INSERT INTO users (tenant_id, role, auth_method, pnr_hash)
-        VALUES (${tenantId}, 'customer', 'bankid', ${hmacField(pnr, PNR_HMAC_KEY)})
+        INSERT INTO users (tenant_id, role, auth_method, pnr_hash, customer_id)
+        VALUES (${tenantId}, 'customer', 'bankid', ${hmacField(pnr, PNR_HMAC_KEY)}, ${customerId})
       `;
 
       const init = await post("/auth/bankid/init", { personalNumber: pnr });
@@ -254,6 +263,11 @@ describe.skipIf(!RUN)("fas 2 e2e — M2M + BankID", () => {
       expect(body.status).toBe("complete");
       expect(decodeJwt(body.accessToken).role).toBe("customer");
       expect(decodeJwt(body.accessToken).tenantId).toBe(tenantId);
+      // customerId måste vara med — annars avvisar verifyAccessToken tokenet
+      // på nästa anrop (packages/shared/src/auth/tokens.ts).
+      expect(decodeJwt(body.accessToken).customerId).toBe(customerId);
+      const me = await get("/auth/me", { authorization: `Bearer ${body.accessToken}` });
+      expect(me.status).toBe(200);
     });
   });
 });

@@ -60,6 +60,23 @@ export const devTokenQuery = {
   required: ["email", "type"],
   properties: {
     email,
-    type: { type: "string", enum: ["email_verification", "password_reset"] },
+    type: { type: "string", enum: ["email_verification", "password_reset", "customer_invite"] },
   },
+} as const;
+
+export const createCustomerInviteBody = {
+  type: "object",
+  additionalProperties: false,
+  required: ["customerId", "email"],
+  properties: {
+    customerId: { type: "integer", minimum: 1 },
+    email,
+  },
+} as const;
+
+export const acceptCustomerInviteBody = {
+  type: "object",
+  additionalProperties: false,
+  required: ["token", "password"],
+  properties: { token, password },
 } as const;

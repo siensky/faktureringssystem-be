@@ -38,3 +38,12 @@ export type {
   UpdateInvoiceInput,
 } from "./rest/invoices";
 export type { UnmatchedTransactionDto, MatchBody, IgnoreBody } from "./rest/payments";
+export type {
+  PortalInvoiceSummaryDto,
+  PortalInvoiceLineDto,
+  PortalInvoiceDetailDto,
+  PortalInvoicePdfDto,
+  PortalAccountSummaryDto,
+  CreateCustomerInviteInput,
+  AcceptCustomerInviteInput,
+} from "./rest/portal";

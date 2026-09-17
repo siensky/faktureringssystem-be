@@ -72,10 +72,15 @@ services:
       BILLING_OPS_CLIENT_ID: ${BILLING_OPS_CLIENT_ID}
       BILLING_OPS_CLIENT_SECRET: ${BILLING_OPS_CLIENT_SECRET}
       BILLING_OPS_CLIENT_SCOPES: ${BILLING_OPS_CLIENT_SCOPES}
-      # billing SJÄLV, för GET /internal/ops/alerts S2S mot payments (fas 7).
+      # billing SJÄLV, för GET /internal/ops/alerts S2S mot payments (fas 7)
+      # och GET /portal/invoices/:id/pdf S2S mot documents (fas 9).
       BILLING_CLIENT_ID: ${BILLING_CLIENT_ID}
       BILLING_CLIENT_SECRET: ${BILLING_CLIENT_SECRET}
       BILLING_CLIENT_SCOPES: ${BILLING_CLIENT_SCOPES}
+      # auth SJÄLV, för POST /auth/customer-invites S2S mot billing (fas 9).
+      AUTH_CLIENT_ID: ${AUTH_CLIENT_ID}
+      AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET}
+      AUTH_CLIENT_SCOPES: ${AUTH_CLIENT_SCOPES}
     depends_on:
       db:
         condition: service_healthy
@@ -254,13 +259,26 @@ services:
       BANKID_PROVIDER: ${BANKID_PROVIDER:-mock}
       JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
-      # Grov global missbruksspärr (packages/shared/src/service/index.ts),
+      # Grov global missbruckspärr (packages/shared/src/service/index.ts),
       # inte den finkorniga strypningen ovan. Höjs i .env/CI — se den
       # filens kommentar om varför (PR-granskning fas 5).
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
+      # Fas 9: POST /auth/customer-invites validerar customerId mot billing
+      # S2S innan en users-rad skrivs — samma mönster som billings
+      # AUTH_BASE_URL/BILLING_CLIENT_ID (services/billing/src/config.ts).
+      # AUTH_BASE_URL pekar på auth SJÄLV (samma tjänste-token-flöde som
+      # varje annan S2S-klient, se services/auth/src/billing-client.ts).
+      BILLING_BASE_URL: http://billing:${BILLING_PORT}
+      AUTH_BASE_URL: http://auth:${AUTH_PORT}
+      AUTH_CLIENT_ID: ${AUTH_CLIENT_ID}
+      AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET}
+      AUTH_CLIENT_SCOPES: ${AUTH_CLIENT_SCOPES}
+      CUSTOMER_INVITE_TTL_DAYS: ${CUSTOMER_INVITE_TTL_DAYS:-7}
     depends_on:
       db:
         condition: service_healthy
+      seed:
+        condition: service_completed_successfully
       migrate:
         condition: service_completed_successfully
       redis:
@@ -305,8 +323,11 @@ services:
       RATE_LIMIT_MAX: ${RATE_LIMIT_MAX:-300}
       # Fas 7: S2S mot payments (unknown-bankgiro) för GET /internal/ops/alerts
       # — samma mönster som payments BILLING_BASE_URL/PAYMENTS_CLIENT_ID.
+      # Fas 9: S2S mot documents (signerad PDF-URL) för GET /portal/
+      # invoices/:id/pdf, samma BILLING_CLIENT_* identitet.
       AUTH_BASE_URL: http://auth:${AUTH_PORT}
       PAYMENTS_BASE_URL: http://payments:${PAYMENTS_PORT}
+      DOCUMENTS_BASE_URL: http://documents:${DOCUMENTS_PORT}
       BILLING_CLIENT_ID: ${BILLING_CLIENT_ID}
       BILLING_CLIENT_SECRET: ${BILLING_CLIENT_SECRET}
       BILLING_CLIENT_SCOPES: ${BILLING_CLIENT_SCOPES}

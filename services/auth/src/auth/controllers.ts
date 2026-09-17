@@ -5,7 +5,13 @@
 import { contextOf } from "@faktura/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { AuthService } from "./services";
-import type { LoginInput, RegisterInput, TokenType } from "./types";
+import type {
+  AcceptCustomerInviteInput,
+  CreateCustomerInviteInput,
+  LoginInput,
+  RegisterInput,
+  TokenType,
+} from "./types";
 
 const cid = (req: FastifyRequest) =>
   (req.headers["x-correlation-id"] as string | undefined) ?? undefined;
@@ -55,6 +61,21 @@ export function createAuthControllers(service: AuthService) {
       reply: FastifyReply,
     ) {
       return reply.send(await service.issueDevToken(req.query.email, req.query.type));
+    },
+
+    async createCustomerInvite(
+      req: FastifyRequest<{ Body: CreateCustomerInviteInput }>,
+      reply: FastifyReply,
+    ) {
+      const result = await service.createCustomerInvite(contextOf(req), req.body);
+      return reply.status(201).send(result);
+    },
+
+    async acceptCustomerInvite(
+      req: FastifyRequest<{ Body: AcceptCustomerInviteInput }>,
+      reply: FastifyReply,
+    ) {
+      return reply.send(await service.acceptCustomerInvite(req.body, cid(req)));
     },
   };
 }

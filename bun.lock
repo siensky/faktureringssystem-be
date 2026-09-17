@@ -42,6 +42,30 @@
         "typescript": "^5",
       },
     },
+    "apps/portal": {
+      "name": "@faktura/portal",
+      "version": "0.0.0",
+      "dependencies": {
+        "@faktura/contracts": "workspace:*",
+        "@tanstack/react-query": "^5.59.16",
+        "react": "^18.3.1",
+        "react-dom": "^18.3.1",
+        "react-router-dom": "^6.27.0",
+      },
+      "devDependencies": {
+        "@types/bun": "latest",
+        "@types/react": "^18.3.12",
+        "@types/react-dom": "^18.3.1",
+        "@vitejs/plugin-react": "^4.3.3",
+        "autoprefixer": "^10.4.20",
+        "postcss": "^8.4.47",
+        "tailwindcss": "^3.4.14",
+        "vite": "^5.4.10",
+      },
+      "peerDependencies": {
+        "typescript": "^5",
+      },
+    },
     "packages/contracts": {
       "name": "@faktura/contracts",
       "version": "0.0.0",
@@ -248,6 +272,8 @@
     "@faktura/contracts": ["@faktura/contracts@workspace:packages/contracts"],
 
     "@faktura/payments": ["@faktura/payments@workspace:services/payments"],
+
+    "@faktura/portal": ["@faktura/portal@workspace:apps/portal"],
 
     "@faktura/shared": ["@faktura/shared@workspace:packages/shared"],
 

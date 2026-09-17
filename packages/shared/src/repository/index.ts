@@ -15,6 +15,8 @@ export interface RequestContext {
   userId: number;
   tenantId: number;
   role: "admin" | "customer";
+  /** Bara satt för role: "customer" (domain.md #32, två lager åtkomstkontroll). */
+  customerId?: number;
   /** Följer med genom hela kedjan för spårbarhet (architecture.md #5). */
   correlationId: string;
 }
@@ -30,6 +32,20 @@ export abstract class TenantScopedRepository {
     const id = this.ctx?.tenantId;
     if (id === undefined || id === null || Number.isNaN(id)) {
       throw new InternalError("Repository anropat utan tenant i RequestContext");
+    }
+    return id;
+  }
+
+  /**
+   * Kund-id att filtrera på i portalen — samma "failar stängt"-princip som
+   * tenantId (domain.md #32: rätt tenant OCH rätt kund). Bara portal-
+   * repositoryn som byggs på en role: "customer"-kontext ska anropa den
+   * här; en admin-kontext saknar customerId och ska aldrig fråga efter det.
+   */
+  protected get customerId(): number {
+    const id = this.ctx?.customerId;
+    if (id === undefined || id === null || Number.isNaN(id)) {
+      throw new InternalError("Repository anropat utan customerId i RequestContext");
     }
     return id;
   }

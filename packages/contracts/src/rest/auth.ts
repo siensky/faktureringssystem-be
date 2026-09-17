@@ -10,4 +10,6 @@ export interface CurrentUserDto {
   tenantName: string;
   email: string | null;
   role: UserRole;
+  /** Fas 9: bara satt för role: "customer" — portalens egen kund-id. */
+  customerId: number | null;
 }

@@ -11,13 +11,20 @@ export interface SessionUser {
   id: number;
   tenant_id: number;
   role: "admin" | "customer";
+  /** Bara satt för role: "customer" (domain.md #32). */
+  customer_id?: number | null;
 }
 
 export function createSessionIssuer(deps: { sql: Sql; config: typeof Config }) {
   return {
     async issue(user: SessionUser) {
       const accessToken = await signAccessToken(
-        { userId: user.id, tenantId: user.tenant_id, role: user.role },
+        {
+          userId: user.id,
+          tenantId: user.tenant_id,
+          role: user.role,
+          ...(user.customer_id != null ? { customerId: user.customer_id } : {}),
+        },
         deps.config.jwtUserSecret,
       );
       const refreshToken = generateToken();

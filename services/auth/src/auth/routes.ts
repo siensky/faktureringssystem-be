@@ -7,6 +7,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { createAuthControllers } from "./controllers";
 import * as schema from "./schema";
 import type { AuthService } from "./services";
+import type { AcceptCustomerInviteInput, CreateCustomerInviteInput } from "./types";
 
 type PreHandler = (req: FastifyRequest, reply: FastifyReply) => Promise<void>;
 
@@ -17,6 +18,7 @@ export function registerAuthRoutes(
     devEndpointsEnabled: boolean;
     strictRateLimitMax: number;
     requireUser: PreHandler;
+    requireAdmin: PreHandler;
   },
 ): void {
   const c = createAuthControllers(service);
@@ -43,6 +45,24 @@ export function registerAuthRoutes(
     "/auth/reset-password",
     { schema: { body: schema.resetPasswordBody }, ...strictLimit },
     c.resetPassword,
+  );
+
+  // Fas 9 — kundportal. Skapandet kräver en inloggad admin (skriver
+  // auth-ägda tabeller på en annan tenants uppdrag går inte, se
+  // billing-client.ts); accept är publik precis som verify-email/
+  // reset-password och delar deras strypning (gissningsbar länk).
+  app.post<{ Body: CreateCustomerInviteInput }>(
+    "/auth/customer-invites",
+    {
+      preHandler: [opts.requireUser, opts.requireAdmin],
+      schema: { body: schema.createCustomerInviteBody },
+    },
+    c.createCustomerInvite,
+  );
+  app.post<{ Body: AcceptCustomerInviteInput }>(
+    "/auth/accept-customer-invite",
+    { schema: { body: schema.acceptCustomerInviteBody }, ...strictLimit },
+    c.acceptCustomerInvite,
   );
 
   if (opts.devEndpointsEnabled) {

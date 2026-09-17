@@ -107,13 +107,25 @@ async function main(): Promise<void> {
       clientId: required("BILLING_CLIENT_ID"),
       clientSecret: required("BILLING_CLIENT_SECRET"),
       // Minsta möjliga scope (architecture.md #18): GET /internal/ops/alerts
-      // anropar bara payments unknown-bankgiro-driftvy, S2S i stället för en
-      // direkt DB-läsning över tjänstegränsen (fas 7).
-      scopes: (process.env.BILLING_CLIENT_SCOPES ?? "payments:ops:read")
+      // anropar payments unknown-bankgiro-driftvy (fas 7); GET /portal/
+      // invoices/:id/pdf anropar documents PDF-URL (fas 9). Samma
+      // klientidentitet, två anropsmål.
+      scopes: (process.env.BILLING_CLIENT_SCOPES ?? "payments:ops:read documents:pdf:read")
         .split(/\s+/)
         .filter(Boolean),
       description:
-        "billing-tjänsten: läser payments unknown-bankgiro för GET /internal/ops/alerts (fas 7)",
+        "billing-tjänsten: payments unknown-bankgiro (fas 7) och documents PDF-URL (fas 9)",
+    },
+    {
+      clientId: required("AUTH_CLIENT_ID"),
+      clientSecret: required("AUTH_CLIENT_SECRET"),
+      // Minsta möjliga scope (architecture.md #18): POST
+      // /auth/customer-invites validerar customerId mot billing INNAN en
+      // users-rad skrivs (fas 9).
+      scopes: (process.env.AUTH_CLIENT_SCOPES ?? "billing:customer:read")
+        .split(/\s+/)
+        .filter(Boolean),
+      description: "auth-tjänsten: validerar customerId mot billing för kundinbjudan (fas 9)",
     },
   ];
 
