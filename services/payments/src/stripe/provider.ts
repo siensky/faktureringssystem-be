@@ -19,16 +19,29 @@ export interface CreateCheckoutSessionParams {
   invoiceId: number;
   successUrl: string;
   cancelUrl: string;
+  /**
+   * Stams EN gång per skapandeförsök i service.ts och skickas som Stripes
+   * egen Idempotency-Key-header (RealStripeProvider) — Stripes egen
+   * rekommendation för att skydda ETT anrop mot att av misstag skickas två
+   * gånger (t.ex. en nätverksretry). Skiljer sig från den bredare
+   * "finns det redan en väntande session"-kollen i service.ts, som
+   * förhindrar att TVÅ SKILDA anrop (dubbelklick, två flikar) någonsin når
+   * hit samtidigt (kodgranskning fas 10, fynd 1).
+   */
+  requestId: string;
 }
 
 export interface CheckoutSession {
   sessionId: string;
   url: string;
+  expiresAt: Date;
 }
 
 export interface StripeProvider {
   createCheckoutSession(params: CreateCheckoutSessionParams): Promise<CheckoutSession>;
 }
+
+const MOCK_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
  * Ingen nätverksanrop. sessionId är deterministisk (härledd ur tenant+
@@ -39,7 +52,11 @@ export interface StripeProvider {
 export class MockStripeProvider implements StripeProvider {
   async createCheckoutSession(params: CreateCheckoutSessionParams): Promise<CheckoutSession> {
     const sessionId = `cs_test_mock_${params.tenantId}_${params.invoiceId}_${Date.now()}`;
-    return { sessionId, url: `https://checkout.stripe.test/mock/${sessionId}` };
+    return {
+      sessionId,
+      url: `https://checkout.stripe.test/mock/${sessionId}`,
+      expiresAt: new Date(Date.now() + MOCK_SESSION_TTL_MS),
+    };
   }
 }
 
@@ -74,6 +91,8 @@ export class RealStripeProvider implements StripeProvider {
       headers: {
         authorization: `Bearer ${this.secretKey}`,
         "content-type": "application/x-www-form-urlencoded",
+        // Stripes egen rekommendation — se CreateCheckoutSessionParams.requestId.
+        "idempotency-key": params.requestId,
       },
       body: body.toString(),
     });
@@ -81,7 +100,7 @@ export class RealStripeProvider implements StripeProvider {
       const detail = await res.text().catch(() => "");
       throw new Error(`Stripe checkout/sessions svarade ${res.status}: ${detail}`);
     }
-    const json = (await res.json()) as { id: string; url: string };
-    return { sessionId: json.id, url: json.url };
+    const json = (await res.json()) as { id: string; url: string; expires_at: number };
+    return { sessionId: json.id, url: json.url, expiresAt: new Date(json.expires_at * 1000) };
   }
 }

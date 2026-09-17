@@ -1,5 +1,5 @@
 import { useQuery } from "@tanstack/react-query";
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { useParams, useSearchParams } from "react-router-dom";
 import { ApiError } from "../api/client";
 import * as invoicesApi from "../api/invoices";
@@ -13,6 +13,10 @@ const INVOICE_TYPE_LABELS: Record<string, string> = {
 };
 
 const PAYABLE_STATUSES = new Set(["sent", "overdue"]);
+// Kodgranskning fas 10, fynd 2: utan en bortre gräns pollar sidan i all
+// oändlighet om webhooken av någon anledning aldrig kommer fram (fel
+// konfigurerad endpoint, saknad webhook-registrering hos Stripe, ...).
+const POLL_TIMEOUT_MS = 60_000;
 
 export function InvoiceDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -24,6 +28,17 @@ export function InvoiceDetailPage() {
   const [payError, setPayError] = useState<string | null>(null);
   const [isStartingPayment, setIsStartingPayment] = useState(false);
 
+  // Satt EN gång, lazy, första gången sidan renderas med ?payment=success
+  // — inte i en effekt, så det första pollningsvarvet inte missar en
+  // tick (samma "lazy ref-init under rendering"-mönster React själv
+  // dokumenterar).
+  const pollStartedAt = useRef<number | null>(null);
+  if (paymentParam === "success" && pollStartedAt.current === null) {
+    pollStartedAt.current = Date.now();
+  }
+  const hasTimedOut = () =>
+    pollStartedAt.current !== null && Date.now() - pollStartedAt.current > POLL_TIMEOUT_MS;
+
   // Betalstatus kommer ALLTID från Stripes webhook, aldrig från att kunden
   // landar tillbaka här (domain.md #26) — "success" bevisar ingenting i
   // sig. Så länge fakturan ännu inte syns som betald pollar vi kort medan
@@ -32,7 +47,9 @@ export function InvoiceDetailPage() {
     queryKey: ["invoices", invoiceId],
     queryFn: () => invoicesApi.getInvoice(invoiceId),
     refetchInterval: (query) =>
-      paymentParam === "success" && query.state.data?.status !== "paid" ? 2000 : false,
+      paymentParam === "success" && query.state.data?.status !== "paid" && !hasTimedOut()
+        ? 2000
+        : false,
   });
 
   // Ingen länk renderas i förväg — en signerad URL är en bärartoken
@@ -98,7 +115,9 @@ export function InvoiceDetailPage() {
       )}
       {paymentParam === "success" && invoice.status !== "paid" && (
         <p className="mb-4 rounded bg-amber-50 px-3 py-2 text-sm text-amber-800">
-          Bekräftar betalningen med Stripe — det kan ta någon sekund.
+          {hasTimedOut()
+            ? "Det tar längre tid än vanligt att bekräfta betalningen. Fakturan uppdateras automatiskt så fort den är bokförd — ladda om sidan om en stund för att kolla."
+            : "Bekräftar betalningen med Stripe — det kan ta någon sekund."}
         </p>
       )}
       {paymentParam === "cancelled" && (

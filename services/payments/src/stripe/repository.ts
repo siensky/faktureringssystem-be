@@ -13,12 +13,18 @@ export class StripePaymentRepository {
     tenantId: number;
     invoiceId: number;
     stripeSessionId: string;
+    checkoutUrl: string;
+    expiresAt: Date;
     amountOre: number;
     currency: string;
   }): Promise<StripePaymentRow> {
     const [row] = await this.sql<StripePaymentRow[]>`
-      INSERT INTO stripe_payments (tenant_id, invoice_id, stripe_session_id, amount_ore, currency)
-      VALUES (${data.tenantId}, ${data.invoiceId}, ${data.stripeSessionId}, ${data.amountOre}, ${data.currency})
+      INSERT INTO stripe_payments (
+        tenant_id, invoice_id, stripe_session_id, checkout_url, expires_at, amount_ore, currency
+      ) VALUES (
+        ${data.tenantId}, ${data.invoiceId}, ${data.stripeSessionId}, ${data.checkoutUrl},
+        ${data.expiresAt}, ${data.amountOre}, ${data.currency}
+      )
       RETURNING *
     `;
     if (!row) throw new Error("INSERT stripe_payments returnerade ingen rad");
@@ -28,6 +34,28 @@ export class StripePaymentRepository {
   async findBySessionId(stripeSessionId: string): Promise<StripePaymentRow | undefined> {
     const [row] = await this.sql<StripePaymentRow[]>`
       SELECT * FROM stripe_payments WHERE stripe_session_id = ${stripeSessionId} LIMIT 1
+    `;
+    return row;
+  }
+
+  /**
+   * Redan väntande, INTE utgången session för fakturan — kodgranskning
+   * fas 10, fynd 1: createCheckoutSession återanvänder den här i stället
+   * för att skapa ännu en betalbar session för samma faktura. Ingen
+   * DB-constraint bakom kollen (se migrationens kommentar om varför en
+   * tidsbunden UNIQUE inte går) — en genuint samtidig dubblett är en känd,
+   * accepterad kapplöpning, se service.ts.
+   */
+  async findActivePendingByInvoice(
+    tenantId: number,
+    invoiceId: number,
+  ): Promise<StripePaymentRow | undefined> {
+    const [row] = await this.sql<StripePaymentRow[]>`
+      SELECT * FROM stripe_payments
+      WHERE tenant_id = ${tenantId} AND invoice_id = ${invoiceId}
+        AND paid_at IS NULL AND expires_at > now()
+      ORDER BY created_at DESC
+      LIMIT 1
     `;
     return row;
   }

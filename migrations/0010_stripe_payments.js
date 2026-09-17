@@ -33,7 +33,19 @@
  *
  * GRANT: 0008_service_roles.js är redan skeppad (database.md #2, en
  * applicerad migration ändras aldrig) — en ny egen tabell behöver sin
- * GRANT här, i samma migration som skapar den.
+ * GRANT här, i samma migration som skapar den. Bara SELECT/INSERT/UPDATE
+ * — repository.ts gör aldrig DELETE, och fas 7:s princip är att GRANT
+ * speglar faktisk användning (kodgranskning fas 10, fynd 3).
+ *
+ * checkout_url + expires_at (kodgranskning fas 10, fynd 1): utan dem
+ * fanns inget som hindrade två betalbara Stripe-sessioner för SAMMA
+ * faktura — ett dubbelklick, två flikar eller en nätverksretry hann alla
+ * skapa en egen, giltig session innan den första ens redirectat iväg
+ * kunden. services/payments/src/stripe/service.ts återanvänder nu en
+ * redan skapad, ännu inte utgången session i stället för att skapa en ny
+ * — expires_at (satt av providern, default Stripes egna 24h) är det som
+ * avgör om den gamla fortfarande går att återanvända eller är för
+ * gammal för att lita på.
  *
  * @type {import('node-pg-migrate').ColumnDefinitions | undefined}
  */
@@ -47,6 +59,11 @@ export const up = (pgm) => {
       tenant_id          INTEGER NOT NULL REFERENCES tenants (id) ON DELETE CASCADE,
       invoice_id         INTEGER NOT NULL REFERENCES invoices (id) ON DELETE RESTRICT,
       stripe_session_id  TEXT NOT NULL UNIQUE,
+      -- Så en väntande session kan återanvändas utan ett nytt Stripe-anrop
+      -- (se moduldocen ovan) — aldrig en bärartoken i sig (bara en sida
+      -- Stripe själva serverar), så ingen domain.md #19-risk att lagra den.
+      checkout_url       TEXT NOT NULL,
+      expires_at         TIMESTAMPTZ NOT NULL,
       -- Satt av webhooken när betalningen bokförs — spårbarhet till VILKET
       -- Stripe-event som orsakade övergången. Ingen egen unik-constraint:
       -- paid_at IS NULL-villkoret i UPDATE:en är det som gör webhooken
@@ -61,8 +78,17 @@ export const up = (pgm) => {
 
     CREATE INDEX stripe_payments_tenant_id_idx ON stripe_payments (tenant_id);
     CREATE INDEX stripe_payments_invoice_id_idx ON stripe_payments (invoice_id);
+    -- Snabbvägen i createCheckoutSession — "finns det redan en aktiv
+    -- väntande session för den här fakturan". Ingen UNIQUE-constraint här:
+    -- "aktiv" beror på expires_at > now(), och now() är inte en IMMUTABLE
+    -- funktion som ett partiellt unikt index kan villkoras på. Den sista
+    -- millimetern av kapplöpningen (två genuint samtidiga anrop, bägge
+    -- hinner förbi kollen innan någon skrivit sin rad) är därför en känd,
+    -- accepterad kapplöpning — se services/payments/src/stripe/service.ts.
+    CREATE INDEX stripe_payments_pending_by_invoice_idx ON stripe_payments (invoice_id, created_at DESC)
+      WHERE paid_at IS NULL;
 
-    GRANT SELECT, INSERT, UPDATE, DELETE ON stripe_payments TO payments;
+    GRANT SELECT, INSERT, UPDATE ON stripe_payments TO payments;
   `);
 };
 

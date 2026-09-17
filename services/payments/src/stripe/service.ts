@@ -13,6 +13,7 @@
 // SUM och larmar själv vid en oväntad faktura-status eller överbetalning.
 // Den här servicen behöver alltså inte skydda mot de fallen igen.
 
+import { randomUUID } from "node:crypto";
 import type { PaymentMatchedPayload, PaymentPartialPayload } from "@faktura/contracts";
 import { Conflict, type Logger, NotFound, writeEvent } from "@faktura/shared";
 import type { Sql } from "postgres";
@@ -75,6 +76,22 @@ export function createStripeService(opts: {
         );
       }
 
+      // Kodgranskning fas 10, fynd 1: utan den här kollen kunde ett
+      // dubbelklick, två öppna flikar eller en nätverksretry hinna skapa
+      // FLERA betalbara Stripe-sessioner för samma faktura innan den
+      // första ens redirectat iväg kunden — och blir mer än en av dem
+      // genomförd hos Stripe har kunden betalat två gånger på riktigt,
+      // innan billings befintliga överbetalningslarm (fas 5/7) ens hinner
+      // reagera på bokföringssidan. En redan väntande, INTE utgången
+      // session återanvänds i stället för att en ny skapas.
+      const existing = await repo.findActivePendingByInvoice(
+        input.tenantId,
+        resolved.currentInvoiceId,
+      );
+      if (existing) {
+        return { url: existing.checkout_url };
+      }
+
       // Kedjeföljd faktura-id (resolved.currentInvoiceId, inte
       // input.invoiceId) i både Stripe-metadatan och länkarna, av samma
       // skäl som OCR-matchningen kedjeföljer (domain.md #33): en
@@ -87,12 +104,18 @@ export function createStripeService(opts: {
         invoiceId: resolved.currentInvoiceId,
         successUrl: `${portalBaseUrl}/invoices/${resolved.currentInvoiceId}?payment=success`,
         cancelUrl: `${portalBaseUrl}/invoices/${resolved.currentInvoiceId}?payment=cancelled`,
+        // Skyddar bara DET HÄR anropet mot att av misstag nå Stripe två
+        // gånger (t.ex. payments egen nätverksretry) — se
+        // provider.ts:s CreateCheckoutSessionParams.requestId.
+        requestId: randomUUID(),
       });
 
       await repo.insertPending({
         tenantId: input.tenantId,
         invoiceId: resolved.currentInvoiceId,
         stripeSessionId: session.sessionId,
+        checkoutUrl: session.url,
+        expiresAt: session.expiresAt,
         amountOre: resolved.remainingOre,
         currency: resolved.currency,
       });

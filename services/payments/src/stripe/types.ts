@@ -3,6 +3,8 @@ export interface StripePaymentRow {
   tenant_id: number;
   invoice_id: number;
   stripe_session_id: string;
+  checkout_url: string;
+  expires_at: Date;
   stripe_event_id: string | null;
   amount_ore: string;
   currency: string;

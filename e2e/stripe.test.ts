@@ -174,6 +174,42 @@ describe.skipIf(!RUN)("fas 10 e2e — Stripe-betalning", () => {
     expect(Number(row!.amount_ore)).toBe(FULL_AMOUNT_ORE);
   });
 
+  test("dubbelklick (eller två flikar): ett andra anrop innan sessionen gått ut återanvänder samma, skapar ingen ny (kodgranskning fas 10, fynd 1)", async () => {
+    const admin = await newAdmin();
+    await fillCompanySettings(admin);
+    const email = `kund-${uniq()}@ex.test`;
+    const customerId = await makeCustomer(admin, email);
+    const invoiceId = await sentInvoice(admin, customerId);
+    const customer = await inviteAndAccept(admin, customerId, email);
+    const cAuth = {
+      authorization: `Bearer ${customer.accessToken}`,
+      "content-type": "application/json",
+    };
+
+    const first = await fetch(`${BILLING_URL}/portal/invoices/${invoiceId}/pay`, {
+      method: "POST",
+      headers: cAuth,
+      body: "{}",
+    });
+    expect(first.status).toBe(201);
+    const { url: firstUrl } = (await first.json()) as { url: string };
+
+    const second = await fetch(`${BILLING_URL}/portal/invoices/${invoiceId}/pay`, {
+      method: "POST",
+      headers: cAuth,
+      body: "{}",
+    });
+    expect(second.status).toBe(201);
+    const { url: secondUrl } = (await second.json()) as { url: string };
+
+    expect(secondUrl).toBe(firstUrl);
+    const [{ n }] = await sql<{ n: number }[]>`
+      SELECT count(*)::int AS n FROM stripe_payments
+      WHERE tenant_id = ${admin.tenantId} AND invoice_id = ${invoiceId}
+    `;
+    expect(n).toBe(1);
+  });
+
   test("rollisolering: en kund kan inte betala en annan kunds faktura (404), inte heller en annan tenants", async () => {
     const admin = await newAdmin();
     await fillCompanySettings(admin);
