@@ -347,6 +347,115 @@ describe.skipIf(!RUN)("fas 3 e2e — billing", () => {
     expect(luhnValid(body.ocrNumber)).toBe(true);
   });
 
+  test("POST /admin/invoices med inline customer skapar kunden i samma anrop", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+
+    const res = await postTo(
+      BILLING_URL,
+      "/admin/invoices",
+      {
+        customer: {
+          customerType: "company",
+          name: `Inline AB ${uniq()}`,
+          email: `${uniq()}@ex.test`,
+          orgNumber: validOrgNumber(),
+        },
+        lines: ONE_LINE,
+      },
+      idem(s),
+    );
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { id: number; customerId: number; status: string };
+    expect(body.status).toBe("draft");
+
+    // Kunden finns nu som en riktig, fristående kundrad — inte bara inbäddad i fakturan.
+    const custRes = await getTo(BILLING_URL, `/admin/customers/${body.customerId}`, auth(s));
+    expect(custRes.status).toBe(200);
+
+    // Misslyckas fakturan (här: ingen lines-rad alls -> 400 från schema) ska
+    // ingen kundrad bli kvar övergiven — samma transaktion, allt eller inget.
+    const before =
+      await sql`SELECT count(*)::int AS n FROM customers WHERE tenant_id = ${s.tenantId}`;
+    const failed = await postTo(
+      BILLING_URL,
+      "/admin/invoices",
+      {
+        customer: {
+          customerType: "company",
+          name: "Ska aldrig sparas",
+          email: `${uniq()}@ex.test`,
+          orgNumber: validOrgNumber(),
+        },
+        lines: [],
+      },
+      idem(s),
+    );
+    expect(failed.status).toBe(400);
+    const after =
+      await sql`SELECT count(*)::int AS n FROM customers WHERE tenant_id = ${s.tenantId}`;
+    expect((after[0] as { n: number }).n).toBe((before[0] as { n: number }).n);
+  });
+
+  test("POST /admin/invoices med inline customer och redan existerande personnummer ger 409, ingen faktura skapas", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const pnr = validPnr();
+    await postTo(
+      BILLING_URL,
+      "/admin/customers",
+      { customerType: "private", name: "Redan kund", email: `${uniq()}@ex.test`, pnr },
+      idem(s),
+    );
+
+    const before =
+      await sql`SELECT count(*)::int AS n FROM invoices WHERE tenant_id = ${s.tenantId}`;
+    const res = await postTo(
+      BILLING_URL,
+      "/admin/invoices",
+      {
+        customer: {
+          customerType: "private",
+          name: "Samma person igen",
+          email: `${uniq()}@ex.test`,
+          pnr,
+        },
+        lines: ONE_LINE,
+      },
+      idem(s),
+    );
+    expect(res.status).toBe(409);
+    const after =
+      await sql`SELECT count(*)::int AS n FROM invoices WHERE tenant_id = ${s.tenantId}`;
+    expect((after[0] as { n: number }).n).toBe((before[0] as { n: number }).n);
+  });
+
+  test("POST /admin/invoices avvisar både customerId+customer samtidigt och ingetdera", async () => {
+    const s = await newAdmin();
+    await fillCompanySettings(s);
+    const customerId = await makeCustomer(s);
+
+    const both = await postTo(
+      BILLING_URL,
+      "/admin/invoices",
+      {
+        customerId,
+        customer: {
+          customerType: "company",
+          name: "X",
+          email: "x@ex.test",
+          orgNumber: validOrgNumber(),
+        },
+        lines: ONE_LINE,
+      },
+      idem(s),
+    );
+    expect(both.status).toBe(400);
+
+    const neither = await postTo(BILLING_URL, "/admin/invoices", { lines: ONE_LINE }, idem(s));
+    expect(neither.status).toBe(400);
+  });
+
   test("send kräver avsändaruppgifter (422), PUT/DELETE ger 409 efter send", async () => {
     const s = await newAdmin();
     const customerId = await makeCustomer(s);

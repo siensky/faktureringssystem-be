@@ -2,6 +2,8 @@
 // Delas med apps/backoffice. Belopp är kronor (number) här — mapparna
 // konverterar öre -> kronor sist, precis vid API-gränsen (database.md #8).
 
+import type { CreateCustomerInput } from "./customers";
+
 export type InvoiceType = "invoice" | "credit_note" | "reminder";
 export type InvoiceStatus =
   | "draft"
@@ -64,7 +66,10 @@ export interface LineInputDto {
 }
 
 export interface CreateInvoiceInput {
-  customerId: number;
+  /** Exakt en av customerId/customer — servern avvisar annars. */
+  customerId?: number;
+  /** Ny kund, skapas i samma anrop som fakturan. */
+  customer?: CreateCustomerInput;
   dateIssued?: string;
   dateDue?: string;
   currency?: string;

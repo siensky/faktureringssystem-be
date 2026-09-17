@@ -12,21 +12,26 @@ const addr = { type: "string", minLength: 1, maxLength: 200 } as const;
 const zip = { type: "string", minLength: 1, maxLength: 12 } as const;
 const paymentTermsDays = { type: "integer", minimum: 0, maximum: 365 } as const;
 
+// Delas med invoices/schema.ts (kunduppgifter inline på fakturaformuläret,
+// se createInvoiceBody) — samma valideringsregler ska gälla oavsett väg in.
+export const customerProperties = {
+  customerType: { type: "string", enum: ["company", "private"] },
+  name,
+  email,
+  orgNumber,
+  pnr,
+  addressStreet: addr,
+  addressZip: zip,
+  addressCity: addr,
+  paymentTermsDays,
+} as const;
+export const customerRequired = ["customerType", "name", "email"] as const;
+
 export const createCustomerBody = {
   type: "object",
   additionalProperties: false,
-  required: ["customerType", "name", "email"],
-  properties: {
-    customerType: { type: "string", enum: ["company", "private"] },
-    name,
-    email,
-    orgNumber,
-    pnr,
-    addressStreet: addr,
-    addressZip: zip,
-    addressCity: addr,
-    paymentTermsDays,
-  },
+  required: customerRequired,
+  properties: customerProperties,
 } as const;
 
 export const updateCustomerBody = {

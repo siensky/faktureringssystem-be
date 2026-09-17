@@ -24,22 +24,21 @@ export function createBankIdService(deps: Deps) {
   const sessionIssuer = createSessionIssuer({ sql: deps.sql, config: deps.config });
 
   return {
-    async init(personalNumber: string, endUserIp: string) {
-      // Windowed rate-limit per IP OCH per personnummer — BankID-init är en
-      // kostnadsyta (planens Rate limiting-avsnitt). Båda nycklarna
-      // inkrementeras vid varje anrop.
+    async init(personalNumber: string | undefined, endUserIp: string) {
+      // Windowed rate-limit per IP OCH (om känt) per personnummer — BankID-
+      // init är en kostnadsyta (planens Rate limiting-avsnitt).
       await assertInitRate(deps.redis, `bankid-init:ip:${endUserIp}`);
-      // Kanonisera till 12 siffror så 10- och 12-siffrig form nycklar lika
-      // (samma kanonisering som billing customers.pnr_hmac använder).
-      await assertInitRate(
-        deps.redis,
-        `bankid-init:pnr:${hmacField(normalizePnr(personalNumber), deps.config.pnrHmacKey)}`,
-      );
-      const { orderRef, autoStartToken, qrData } = await deps.provider.init({
-        personalNumber,
-        endUserIp,
-      });
-      return { orderRef, autoStartToken, qrData };
+      if (personalNumber) {
+        // Kanonisera till 12 siffror så 10- och 12-siffrig form nycklar lika
+        // (samma kanonisering som billing customers.pnr_hmac använder).
+        await assertInitRate(
+          deps.redis,
+          `bankid-init:pnr:${hmacField(normalizePnr(personalNumber), deps.config.pnrHmacKey)}`,
+        );
+      }
+      const { orderRef, autoStartToken, qrStartToken, qrStartSecret, qrStartedAt } =
+        await deps.provider.init({ personalNumber, endUserIp });
+      return { orderRef, autoStartToken, qrStartToken, qrStartSecret, qrStartedAt };
     },
 
     async collect(orderRef: string) {

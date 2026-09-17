@@ -97,7 +97,7 @@ startService({
     });
     registerCustomerRoutes(app, customerService, sql, { userChain, requireService });
 
-    const invoiceService = createInvoiceService(sql);
+    const invoiceService = createInvoiceService(sql, customerService);
     registerInvoiceRoutes(app, invoiceService, sql, { userChain, requireService });
 
     // Fas 9: kundportalen — skrivskyddad läsning av EGNA fakturor

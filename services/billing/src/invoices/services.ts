@@ -28,6 +28,7 @@ import type { Sql, TransactionSql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { CompanySettingsRepository } from "../company-settings/repository";
 import type { CompanySettingsRow } from "../company-settings/types";
+import type { CustomerService } from "../customers/services";
 import { addDays, advanceByInterval, todayInStockholm } from "../domain/dates";
 import { type LineAmounts, computeLine, sumTotals } from "../domain/vat";
 import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
@@ -128,7 +129,7 @@ function assertDates(dateIssued: string, dateDue: string): void {
   }
 }
 
-export function createInvoiceService(sql: Sql) {
+export function createInvoiceService(sql: Sql, customerService: CustomerService) {
   const invRepo = (ctx: RequestContext) => new InvoiceRepository(sql, ctx);
   const csRepo = (ctx: RequestContext) => new CompanySettingsRepository(sql, ctx);
 
@@ -171,7 +172,23 @@ export function createInvoiceService(sql: Sql) {
     async createInTx(ctx: RequestContext, tx: TransactionSql, input: CreateInvoiceInput) {
       const repo = invRepo(ctx);
 
-      const customer = await repo.findCustomer(input.customerId, tx);
+      // schema.ts (oneOf) garanterar redan exakt en av de två — kollas igen
+      // här i stället för att lita blint på det, samma disciplin som
+      // repository-basklassens tenant-koll (architecture.md).
+      let customerId: number;
+      if (input.customerId !== undefined) {
+        customerId = input.customerId;
+      } else if (input.customer) {
+        // Skapas i SAMMA transaktion som fakturan: misslyckas fakturan
+        // (t.ex. ogiltiga datum längre ner) rullar den nya kunden tillbaka
+        // med den, ingen övergiven kundrad utan faktura.
+        const created = await customerService.createInTx(ctx, tx, input.customer);
+        customerId = created.body.id;
+      } else {
+        throw new BadRequest("customerId eller customer måste anges");
+      }
+
+      const customer = await repo.findCustomer(customerId, tx);
       if (!customer) throw new BadRequest("Okänd kund");
 
       const settings = await csRepo(ctx).find();

@@ -1,4 +1,4 @@
-import type { LineInputDto, VatRate } from "@faktura/contracts";
+import type { CreateInvoiceInput, CustomerType, LineInputDto, VatRate } from "@faktura/contracts";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { type FormEvent, useEffect, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
@@ -33,6 +33,18 @@ const EMPTY_LINE: LineForm = {
   unit: "",
 };
 
+type CustomerMode = "existing" | "new";
+const EMPTY_NEW_CUSTOMER = {
+  customerType: "company" as CustomerType,
+  name: "",
+  email: "",
+  orgNumber: "",
+  pnr: "",
+  addressStreet: "",
+  addressZip: "",
+  addressCity: "",
+};
+
 /** Speglar services/billing/src/domain/vat.ts (öre, avrundning per rad). */
 function lineAmountsOre(line: LineForm) {
   const quantity = Number.parseFloat(line.quantity) || 0;
@@ -58,6 +70,8 @@ export function InvoiceFormPage() {
   });
 
   const [customerId, setCustomerId] = useState<number | "">("");
+  const [customerMode, setCustomerMode] = useState<CustomerMode>("existing");
+  const [newCustomer, setNewCustomer] = useState(EMPTY_NEW_CUSTOMER);
   const [dateIssued, setDateIssued] = useState("");
   const [dateDue, setDateDue] = useState("");
   const [lines, setLines] = useState<LineForm[]>([EMPTY_LINE]);
@@ -98,19 +112,44 @@ export function InvoiceFormPage() {
           lines: lineInputs,
         });
       }
-      if (customerId === "") throw new Error("Välj en kund");
-      return invoicesApi.createInvoice(
-        {
-          customerId,
-          dateIssued: dateIssued || undefined,
-          dateDue: dateDue || undefined,
-          lines: lineInputs,
-        },
-        idempotencyKey,
-      );
+
+      const common = {
+        dateIssued: dateIssued || undefined,
+        dateDue: dateDue || undefined,
+        lines: lineInputs,
+      };
+
+      if (customerMode === "existing") {
+        if (customerId === "") throw new Error("Välj en kund");
+        return invoicesApi.createInvoice({ customerId, ...common }, idempotencyKey);
+      }
+
+      if (!newCustomer.name || !newCustomer.email) {
+        throw new Error("Fyll i namn och e-post för den nya kunden");
+      }
+      if (newCustomer.customerType === "company" && !newCustomer.orgNumber) {
+        throw new Error("Organisationsnummer krävs för en företagskund");
+      }
+      if (newCustomer.customerType === "private" && !newCustomer.pnr) {
+        throw new Error("Personnummer krävs för en privatkund");
+      }
+      const customerInput: CreateInvoiceInput["customer"] = {
+        customerType: newCustomer.customerType,
+        name: newCustomer.name,
+        email: newCustomer.email,
+        orgNumber: newCustomer.customerType === "company" ? newCustomer.orgNumber : undefined,
+        pnr: newCustomer.customerType === "private" ? newCustomer.pnr : undefined,
+        addressStreet: newCustomer.addressStreet || undefined,
+        addressZip: newCustomer.addressZip || undefined,
+        addressCity: newCustomer.addressCity || undefined,
+      };
+      return invoicesApi.createInvoice({ customer: customerInput, ...common }, idempotencyKey);
     },
     onSuccess: (invoice) => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      if (customerMode === "new") {
+        queryClient.invalidateQueries({ queryKey: ["customers"] });
+      }
       navigate(`/invoices/${invoice.id}`);
     },
     onError: (err) => setError(err instanceof Error ? err.message : "Något gick fel"),
@@ -157,46 +196,183 @@ export function InvoiceFormPage() {
       >
         {error && <p className="mb-4 rounded bg-red-50 px-3 py-2 text-sm text-red-700">{error}</p>}
 
-        <div className="mb-6 grid grid-cols-3 gap-4">
-          <label className="text-sm">
-            Kund
-            <select
-              required
-              disabled={isEdit}
-              value={customerId}
-              onChange={(e) => setCustomerId(Number(e.target.value))}
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm disabled:bg-slate-100"
-            >
-              <option value="" disabled>
-                Välj kund…
-              </option>
-              {customers?.items.map((customer) => (
-                <option key={customer.id} value={customer.id}>
-                  {customer.name}
-                </option>
-              ))}
-            </select>
-          </label>
-          <label className="text-sm">
-            Fakturadatum
-            <input
-              type="date"
-              value={dateIssued}
-              onChange={(e) => setDateIssued(e.target.value)}
-              placeholder="idag"
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
-          <label className="text-sm">
-            Förfallodatum
-            <input
-              type="date"
-              value={dateDue}
-              onChange={(e) => setDateDue(e.target.value)}
-              placeholder="kundens betalningsvillkor"
-              className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
-            />
-          </label>
+        <div className="mb-6">
+          {isEdit ? (
+            <label className="mb-4 block max-w-sm text-sm">
+              Kund
+              <select
+                disabled
+                value={customerId}
+                className="mt-1 w-full rounded border border-slate-300 bg-slate-100 px-3 py-2 text-sm"
+              >
+                {customers?.items.map((customer) => (
+                  <option key={customer.id} value={customer.id}>
+                    {customer.name}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : (
+            <div className="mb-4">
+              <span className="text-sm">Kund</span>
+              <div className="mt-1 flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setCustomerMode("existing")}
+                  className={`rounded border px-3 py-1.5 text-sm ${
+                    customerMode === "existing"
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-300 text-slate-600"
+                  }`}
+                >
+                  Befintlig kund
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setCustomerMode("new")}
+                  className={`rounded border px-3 py-1.5 text-sm ${
+                    customerMode === "new"
+                      ? "border-slate-900 bg-slate-900 text-white"
+                      : "border-slate-300 text-slate-600"
+                  }`}
+                >
+                  Ny kund
+                </button>
+              </div>
+
+              {customerMode === "existing" ? (
+                <select
+                  required
+                  value={customerId}
+                  onChange={(e) => setCustomerId(Number(e.target.value))}
+                  className="mt-3 w-full max-w-sm rounded border border-slate-300 px-3 py-2 text-sm"
+                >
+                  <option value="" disabled>
+                    Välj kund…
+                  </option>
+                  {customers?.items.map((customer) => (
+                    <option key={customer.id} value={customer.id}>
+                      {customer.name}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="mt-3 grid grid-cols-2 gap-4 rounded border border-slate-200 bg-slate-50 p-4">
+                  <label className="text-sm">
+                    Typ
+                    <select
+                      value={newCustomer.customerType}
+                      onChange={(e) =>
+                        setNewCustomer({
+                          ...newCustomer,
+                          customerType: e.target.value as CustomerType,
+                        })
+                      }
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    >
+                      <option value="company">Företag</option>
+                      <option value="private">Privatperson</option>
+                    </select>
+                  </label>
+                  <label className="text-sm">
+                    Namn
+                    <input
+                      required
+                      value={newCustomer.name}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, name: e.target.value })}
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm">
+                    E-post
+                    <input
+                      type="email"
+                      required
+                      value={newCustomer.email}
+                      onChange={(e) => setNewCustomer({ ...newCustomer, email: e.target.value })}
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  {newCustomer.customerType === "company" ? (
+                    <label className="text-sm">
+                      Organisationsnummer
+                      <input
+                        required
+                        value={newCustomer.orgNumber}
+                        onChange={(e) =>
+                          setNewCustomer({ ...newCustomer, orgNumber: e.target.value })
+                        }
+                        className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  ) : (
+                    <label className="text-sm">
+                      Personnummer
+                      <input
+                        required
+                        value={newCustomer.pnr}
+                        onChange={(e) => setNewCustomer({ ...newCustomer, pnr: e.target.value })}
+                        className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                      />
+                    </label>
+                  )}
+                  <label className="text-sm">
+                    Gata
+                    <input
+                      value={newCustomer.addressStreet}
+                      onChange={(e) =>
+                        setNewCustomer({ ...newCustomer, addressStreet: e.target.value })
+                      }
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Postnummer
+                    <input
+                      value={newCustomer.addressZip}
+                      onChange={(e) =>
+                        setNewCustomer({ ...newCustomer, addressZip: e.target.value })
+                      }
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                  <label className="text-sm">
+                    Ort
+                    <input
+                      value={newCustomer.addressCity}
+                      onChange={(e) =>
+                        setNewCustomer({ ...newCustomer, addressCity: e.target.value })
+                      }
+                      className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+                    />
+                  </label>
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-4">
+            <label className="text-sm">
+              Fakturadatum
+              <input
+                type="date"
+                value={dateIssued}
+                onChange={(e) => setDateIssued(e.target.value)}
+                placeholder="idag"
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+            <label className="text-sm">
+              Förfallodatum
+              <input
+                type="date"
+                value={dateDue}
+                onChange={(e) => setDateDue(e.target.value)}
+                placeholder="kundens betalningsvillkor"
+                className="mt-1 w-full rounded border border-slate-300 px-3 py-2 text-sm"
+              />
+            </label>
+          </div>
         </div>
 
         <table className="mb-4 w-full text-sm">

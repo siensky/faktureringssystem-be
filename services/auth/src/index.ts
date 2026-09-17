@@ -12,7 +12,7 @@ import {
 } from "@faktura/shared";
 import { registerAuthRoutes } from "./auth/routes";
 import { createAuthService } from "./auth/services";
-import { MockBankIdProvider } from "./bankid/provider";
+import { MockBankIdProvider, RealBankIdProvider } from "./bankid/provider";
 import { registerBankIdRoutes } from "./bankid/routes";
 import { createBankIdService } from "./bankid/services";
 import { SERVICE_NAME, config } from "./config";
@@ -73,13 +73,22 @@ startService({
     const m2mService = createM2mService({ sql, config });
     registerM2mRoutes(app, m2mService, strictLimit);
 
-    // Fas 2: alltid mock. config vägrar starta med mock i produktion —
-    // RealBankIdProvider byggs i fas 11.
+    // config vägrar starta med mock i produktion (services/auth/src/
+    // config.ts) och med real utan certifikatsökvägar, oavsett miljö.
+    const bankIdProvider =
+      config.bankIdProvider === "real"
+        ? new RealBankIdProvider({
+            baseUrl: config.bankIdBaseUrl,
+            certPath: config.bankIdCertPath,
+            certPassphrase: config.bankIdCertPassphrase,
+            caPath: config.bankIdCaPath,
+          })
+        : new MockBankIdProvider(ctx.redis);
     const bankIdService = createBankIdService({
       sql,
       redis: ctx.redis,
       config,
-      provider: new MockBankIdProvider(ctx.redis),
+      provider: bankIdProvider,
     });
     registerBankIdRoutes(app, bankIdService, strictLimit);
 
