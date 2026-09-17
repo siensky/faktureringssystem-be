@@ -257,6 +257,13 @@ services:
       AUTH_TOKEN_PEPPER: ${AUTH_TOKEN_PEPPER}
       AUTH_STRICT_RATE_LIMIT_MAX: ${AUTH_STRICT_RATE_LIMIT_MAX:-10}
       BANKID_PROVIDER: ${BANKID_PROVIDER:-mock}
+      # Fas 11: bara relevanta när BANKID_PROVIDER=real. Sökvägarna pekar in
+      # i containern, dit ./secrets/bankid är monterad nedan (volumes) — inte
+      # sökvägen på värdmaskinen.
+      BANKID_BASE_URL: ${BANKID_BASE_URL:-https://appapi2.test.bankid.com/rp/v6.1}
+      BANKID_CERT_PATH: ${BANKID_CERT_PATH:-}
+      BANKID_CERT_PASSPHRASE: ${BANKID_CERT_PASSPHRASE:-}
+      BANKID_CA_PATH: ${BANKID_CA_PATH:-}
       JWT_SERVICE_SECRET: ${JWT_SERVICE_SECRET}
       PNR_HMAC_KEY: ${PNR_HMAC_KEY}
       # Grov global missbruckspärr (packages/shared/src/service/index.ts),
@@ -274,6 +281,10 @@ services:
       AUTH_CLIENT_SECRET: ${AUTH_CLIENT_SECRET}
       AUTH_CLIENT_SCOPES: ${AUTH_CLIENT_SCOPES}
       CUSTOMER_INVITE_TTL_DAYS: ${CUSTOMER_INVITE_TTL_DAYS:-7}
+    # Fas 11: BankID-certifikatet (P12 + CA-rot). secrets/bankid/ committas
+    # aldrig (git.md #9, .gitignore) — bara relevant när BANKID_PROVIDER=real.
+    volumes:
+      - ./secrets/bankid:/run/secrets/bankid:ro
     depends_on:
       db:
         condition: service_healthy

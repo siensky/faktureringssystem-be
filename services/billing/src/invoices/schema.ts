@@ -3,6 +3,20 @@
 // att radbeloppsberäkningen (quantity * unitPriceOre) håller sig inom
 // säkert heltalsintervall även vid 200 rader.
 
+import { customerProperties, customerRequired } from "../customers/schema";
+
+// Admin kan antingen peka på en befintlig kund (customerId) eller fylla i
+// en ny direkt i fakturaformuläret (customer) — inte båda, inte ingetdera.
+// Samma fältvalidering som POST /admin/customers (customerProperties),
+// så en ny kund skapad via fakturan aldrig är mindre validerad än en
+// skapad via kundsidan.
+const inlineCustomer = {
+  type: "object",
+  additionalProperties: false,
+  required: customerRequired,
+  properties: customerProperties,
+} as const;
+
 const isoDate = { type: "string", format: "date" } as const;
 const line = {
   type: "object",
@@ -23,14 +37,16 @@ const currency = { type: "string", enum: ["SEK"] } as const;
 export const createInvoiceBody = {
   type: "object",
   additionalProperties: false,
-  required: ["customerId", "lines"],
+  required: ["lines"],
   properties: {
     customerId: { type: "integer", minimum: 1 },
+    customer: inlineCustomer,
     dateIssued: isoDate,
     dateDue: isoDate,
     currency,
     lines,
   },
+  oneOf: [{ required: ["customerId"] }, { required: ["customer"] }],
 } as const;
 
 export const updateInvoiceBody = {

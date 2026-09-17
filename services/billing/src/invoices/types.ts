@@ -1,3 +1,4 @@
+import type { CreateCustomerInput } from "../customers/types";
 import type { RecurrenceInterval } from "../domain/dates";
 import type { VatRate } from "../domain/vat";
 
@@ -64,7 +65,10 @@ export interface LineInputDto {
 }
 
 export interface CreateInvoiceInput {
-  customerId: number;
+  /** Exakt en av customerId/customer — schema.ts (oneOf) garanterar det, services.ts kollar igen. */
+  customerId?: number;
+  /** Ny kund, skapad i samma transaktion som fakturan (services.ts). */
+  customer?: CreateCustomerInput;
   dateIssued?: string;
   dateDue?: string;
   currency?: string;
