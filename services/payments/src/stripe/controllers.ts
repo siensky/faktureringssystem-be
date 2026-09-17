@@ -1,4 +1,10 @@
-import { BadRequest, Unauthorized, requireTenantHeader, serviceContextOf } from "@faktura/shared";
+import {
+  BadRequest,
+  Unauthorized,
+  requireTenantHeader,
+  resolveCorrelationId,
+  serviceContextOf,
+} from "@faktura/shared";
 import type { FastifyReply, FastifyRequest } from "fastify";
 import type { StripeCheckoutEvent, StripeService } from "./service";
 import { verifyStripeSignature } from "./signature";
@@ -49,7 +55,13 @@ export function createStripeControllers(deps: {
         throw new BadRequest("id, type och data.object.id krävs");
       }
 
-      const correlationId = String(request.headers["x-correlation-id"] ?? event.id);
+      // event.id (Stripes "evt_..."-format) är ALDRIG ett giltigt UUID —
+      // correlationId går ner i event_outbox.correlation_id (UUID-kolumn),
+      // så fallbacken måste vara ett riktigt genererat UUID, inte Stripes
+      // eget id. resolveCorrelationId gör precis det (och validerar en
+      // eventuell inskickad header), samma helper requireUser/requireService
+      // redan använder.
+      const correlationId = resolveCorrelationId(request.headers["x-correlation-id"]);
       await deps.stripeService.handleCheckoutCompleted(event, correlationId);
 
       // Alltid 200 vid giltig signatur, oavsett om eventet ledde till en
