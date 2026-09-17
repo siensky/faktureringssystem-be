@@ -110,8 +110,15 @@ if (config.isProduction && config.bankIdProvider !== "real") {
 // "real" utan certifikat kan aldrig fungera, oavsett miljö — kraschar
 // direkt i stället för att falla på första BankID-inloggningen (samma
 // disciplin som STRIPE_PROVIDER=real i services/payments/src/config.ts).
-if (config.bankIdProvider === "real" && (!config.bankIdCertPath || !config.bankIdCaPath)) {
-  throw new Error("BANKID_CERT_PATH och BANKID_CA_PATH krävs när BANKID_PROVIDER=real");
+// Alla tre krävs: ett P12-certifikat utan (rätt) lösenord går inte att
+// packa upp, så en saknad passphrase är lika obrukbar som en saknad fil.
+if (
+  config.bankIdProvider === "real" &&
+  (!config.bankIdCertPath || !config.bankIdCertPassphrase || !config.bankIdCaPath)
+) {
+  throw new Error(
+    "BANKID_CERT_PATH, BANKID_CERT_PASSPHRASE och BANKID_CA_PATH krävs när BANKID_PROVIDER=real",
+  );
 }
 
 export const SERVICE_NAME = "auth";

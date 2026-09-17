@@ -41,12 +41,24 @@ describe("BankID-produktionsspärr i config", () => {
     expect(r.stderr).toContain("BANKID_CERT_PATH");
   });
 
-  test("startar med real + certifikatsökvägar i produktion", () => {
+  test("kraschar med real utan passphrase, även när sökvägarna finns", () => {
+    const r = loadConfig({
+      NODE_ENV: "development",
+      BANKID_PROVIDER: "real",
+      BANKID_CERT_PATH: "/secrets/bankid-test.p12",
+      BANKID_CA_PATH: "/secrets/bankid-test-ca.pem",
+    });
+    expect(r.code).not.toBe(0);
+    expect(r.stderr).toContain("BANKID_CERT_PASSPHRASE");
+  });
+
+  test("startar med real + certifikatsökvägar + passphrase i produktion", () => {
     expect(
       loadConfig({
         NODE_ENV: "production",
         BANKID_PROVIDER: "real",
         BANKID_CERT_PATH: "/secrets/bankid-test.p12",
+        BANKID_CERT_PASSPHRASE: "qwerty123",
         BANKID_CA_PATH: "/secrets/bankid-test-ca.pem",
       }).code,
     ).toBe(0);
