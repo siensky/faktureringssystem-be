@@ -260,7 +260,7 @@ services:
       # Fas 11: bara relevanta när BANKID_PROVIDER=real. Sökvägarna pekar in
       # i containern, dit ./secrets/bankid är monterad nedan (volumes) — inte
       # sökvägen på värdmaskinen.
-      BANKID_BASE_URL: ${BANKID_BASE_URL:-https://appapi2.test.bankid.com/rp/v6.1}
+      BANKID_BASE_URL: ${BANKID_BASE_URL:-https://appapi2.test.bankid.com/rp/v6.0}
       BANKID_CERT_PATH: ${BANKID_CERT_PATH:-}
       BANKID_CERT_PASSPHRASE: ${BANKID_CERT_PASSPHRASE:-}
       BANKID_CA_PATH: ${BANKID_CA_PATH:-}

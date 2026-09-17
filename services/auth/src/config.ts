@@ -41,9 +41,12 @@ const optional = loadEnvWithDefaults({
   CUSTOMER_INVITE_TTL_DAYS: "7",
   AUTH_STRICT_RATE_LIMIT_MAX: "10",
   BANKID_PROVIDER: "mock",
-  // Fas 11: BankIDs egen, publika (icke-hemliga) adress för RP-API v6.1
-  // mot testmiljön. Bara relevant när BANKID_PROVIDER=real.
-  BANKID_BASE_URL: "https://appapi2.test.bankid.com/rp/v6.1",
+  // Fas 11: BankIDs egen, publika (icke-hemliga) adress för RP-API mot
+  // testmiljön. v6.0, INTE v6.1 — verifierat manuellt: det delade
+  // testcertifikatet (secrets/bankid/README.md) gav ett blankt 403 på
+  // v6.1 men ett giltigt svar på v6.0, som för övrigt är samma version
+  // BankID kör i produktion. Bara relevant när BANKID_PROVIDER=real.
+  BANKID_BASE_URL: "https://appapi2.test.bankid.com/rp/v6.0",
   // Klientcertifikat (P12) + CA-rot för mutual TLS mot BankID. Filsökvägar,
   // inte innehållet — certifikaten committas ALDRIG (git.md #9). Tomma i
   // mock-läge.

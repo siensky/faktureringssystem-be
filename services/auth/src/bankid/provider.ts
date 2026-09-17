@@ -181,11 +181,13 @@ function createHttpsTransport(cfg: RealBankIdConfig): BankIdTransport {
 }
 
 /**
- * Riktig BankID RP-API v6.1 mot testmiljön (BANKID_BASE_URL, default
- * appapi2.test.bankid.com — se services/auth/src/config.ts). Mocken tas
- * inte bort; CI kör vidare mot den (PLAN.md, fas 11). Den här klassen
- * verifieras med ett injicerat test-transport i stället för ett riktigt
- * nätanrop mot BankID, se bankid-provider.test.ts.
+ * Riktig BankID RP-API mot testmiljön (BANKID_BASE_URL, default v6.0 mot
+ * appapi2.test.bankid.com — se services/auth/src/config.ts. INTE v6.1:
+ * manuellt verifierat att det delade RP-testcertifikatet ger ett blankt
+ * 403 på v6.1 men fungerar på v6.0, samma version BankID kör i
+ * produktion). Mocken tas inte bort; CI kör vidare mot den (PLAN.md, fas
+ * 11). Den här klassen verifieras med ett injicerat test-transport i
+ * stället för ett riktigt nätanrop mot BankID, se bankid-provider.test.ts.
  *
  * BankIDs svar nästlar completionData.user ({ completionData: { user: {
  * personalNumber, name } } }) — plattas ut här till samma form som mocken
