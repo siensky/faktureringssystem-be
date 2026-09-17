@@ -36,8 +36,9 @@ const optional = loadEnvWithDefaults({
   CORS_ORIGIN: "http://localhost:5173",
   NODE_ENV: "development",
   // Minsta möjliga scope (architecture.md #18): payments unknown-bankgiro-
-  // driftvyn (fas 7) och documents PDF-URL (fas 9).
-  BILLING_CLIENT_SCOPES: "payments:ops:read documents:pdf:read",
+  // driftvyn (fas 7), documents PDF-URL (fas 9), och Stripe Checkout-
+  // sessioner (fas 10).
+  BILLING_CLIENT_SCOPES: "payments:ops:read documents:pdf:read payments:stripe:checkout",
 });
 
 function trimTrailingSlash(url: string): string {

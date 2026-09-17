@@ -55,6 +55,13 @@ export interface PortalAccountSummaryDto {
   outstandingInvoiceCount: number;
 }
 
+/** POST /portal/invoices/:id/pay (fas 10) — url till Stripe Checkout,
+ *  öppnas/omdirigeras dit direkt. Ingen belopp-parameter i kroppen: den
+ *  är tom, servern räknar fram beloppet (domain.md #27). */
+export interface PortalPaymentSessionDto {
+  url: string;
+}
+
 /** POST /auth/customer-invites (admin, i auth-tjänsten). */
 export interface CreateCustomerInviteInput {
   customerId: number;

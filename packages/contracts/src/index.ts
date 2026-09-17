@@ -44,6 +44,7 @@ export type {
   PortalInvoiceDetailDto,
   PortalInvoicePdfDto,
   PortalAccountSummaryDto,
+  PortalPaymentSessionDto,
   CreateCustomerInviteInput,
   AcceptCustomerInviteInput,
 } from "./rest/portal";

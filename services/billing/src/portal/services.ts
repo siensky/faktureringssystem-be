@@ -10,6 +10,7 @@ import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { findPdfUrl } from "./documents-client";
 import { toAccountSummary, toDetail, toSummary } from "./mappers";
+import { createStripeCheckoutSession } from "./payments-client";
 import { PortalRepository } from "./repository";
 
 export function createPortalService(sql: Sql, redis: Redis) {
@@ -42,6 +43,22 @@ export function createPortalService(sql: Sql, redis: Redis) {
     async accountSummary(ctx: RequestContext) {
       const repo = new PortalRepository(sql, ctx);
       return toAccountSummary(await repo.accountSummary());
+    },
+
+    /**
+     * POST /portal/invoices/:id/pay (fas 10). repo.findById är det ENDA
+     * som håller kund-gränsen (domain.md #32) — payments S2S-läsning
+     * känner bara till tenant, inte customerId, så utan den här kollen
+     * FÖRST skulle en kund kunna starta en Stripe-betalning mot en annan
+     * kunds faktura hos samma tenant. Själva beloppet hämtas ändå på
+     * nytt av payments (aldrig ett belopp härifrån) — se
+     * payments-client.ts.
+     */
+    async pay(ctx: RequestContext, id: number) {
+      const repo = new PortalRepository(sql, ctx);
+      const row = await repo.findById(id);
+      if (!row) throw new NotFound("Fakturan finns inte");
+      return createStripeCheckoutSession(redis, ctx.tenantId, id, ctx.correlationId);
     },
   };
 }

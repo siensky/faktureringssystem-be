@@ -22,6 +22,8 @@ export const EMAIL_WEBHOOK_SECRET =
   process.env.E2E_EMAIL_WEBHOOK_SECRET ?? "changeme-email-webhook";
 export const PAYMENT_WEBHOOK_SECRET =
   process.env.E2E_PAYMENT_WEBHOOK_SECRET ?? "changeme-payment-webhook";
+export const STRIPE_WEBHOOK_SECRET =
+  process.env.E2E_STRIPE_WEBHOOK_SECRET ?? "changeme-stripe-webhook";
 export const PNR_HMAC_KEY =
   process.env.E2E_PNR_HMAC_KEY ??
   "1111111111111111111111111111111111111111111111111111111111111111";
@@ -157,6 +159,20 @@ export function signEmailWebhook(secret: string, timestamp: string, body: string
  */
 export function signPaymentWebhook(secret: string, timestamp: string, body: string): string {
   return createHmac("sha256", secret).update(`${timestamp}.${body}`, "utf8").digest("hex");
+}
+
+/**
+ * Bygger en giltig "Stripe-Signature"-header för POST /webhooks/stripe —
+ * Stripes RIKTIGA format ("t=<timestamp>,v1=<hex>"), inte de två separata
+ * headers de andra webhookarna ovan använder. Speglar services/payments/
+ * src/stripe/signature.ts:s buildStripeSignatureHeader, men inlinead
+ * (e2e importerar inte tjänsternas interna paket, se filhuvudet).
+ */
+export function signStripeWebhook(secret: string, timestamp: string, body: string): string {
+  const signature = createHmac("sha256", secret)
+    .update(`${timestamp}.${body}`, "utf8")
+    .digest("hex");
+  return `t=${timestamp},v1=${signature}`;
 }
 
 /** Pollar tills predicate() ger truthy eller deadline nås. Returnerar värdet. */
