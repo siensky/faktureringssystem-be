@@ -26,28 +26,7 @@ One company can never see another's data — not "the query happens to filter co
 
 ## Architecture
 
-```
-                         Browser
-                            |
-                            v
-                      +-----------+
-                      |   nginx   |   <- only public entry point
-                      +-----------+
-                            |
-        +----------+--------+--------+-----------+
-        v          v                 v           v
-   +--------+  +---------+     +----------+  +-----------+
-   |  auth  |  | billing |     | payments |  | documents |
-   | (Bun)  |  |  (Bun)  |     |  (Bun)   |  |  (Python) |
-   +---+----+  +----+----+     +----+-----+  +-----+-----+
-       |            |               |              |
-       +------------+-------+-------+--------------+
-                            |
-                            v
-                      +-----------+        +-----------+
-                      | Postgres  |<------>| RabbitMQ  |
-                      +-----------+        +-----------+
-```
+![System design](docs/system-design.png)
 
 Four backend services, one shared Postgres database, RabbitMQ as the event bus between them. Three services are TypeScript on Bun/Fastify; the fourth — PDF rendering and email delivery — is Python/FastAPI, picked specifically for WeasyPrint's real CSS-based PDF layout.
 
@@ -57,6 +36,10 @@ Four backend services, one shared Postgres database, RabbitMQ as the event bus b
 - **documents** (Python) — PDF rendering, email delivery, bounce/delivery-status webhooks
 
 Two React/Vite front-ends (backoffice, portal) talk to the services only through nginx. Internal service-to-service routes (`/internal/*`) are blocked at the nginx layer as a second line of defense, on top of their own service-token auth.
+
+Billing publishes `invoice.sent` when an invoice goes out; documents consumes it, renders the PDF, sends the email, and publishes `invoice.delivery_updated` back. Payments publishes `payment.matched` when an incoming payment is tied to an invoice, which billing consumes to book it.
+
+Events are written to the database in the same transaction as the data they describe (transactional outbox), so a crash can never lose one. Every event consumer, webhook, and invoice-creating API call is idempotent — a retried webhook, a redelivered event, or a duplicate `POST` never double-books a payment or sends a second invoice.
 
 ## Testing
 
