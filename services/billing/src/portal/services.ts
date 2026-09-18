@@ -9,7 +9,7 @@ import type { RequestContext } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { findPdfUrl } from "./documents-client";
-import { toAccountSummary, toDetail, toSummary } from "./mappers";
+import { toAccountSummary, toDetail, toPortalTemplate, toSummary } from "./mappers";
 import { createStripeCheckoutSession } from "./payments-client";
 import { PortalRepository } from "./repository";
 
@@ -43,6 +43,13 @@ export function createPortalService(sql: Sql, redis: Redis) {
     async accountSummary(ctx: RequestContext) {
       const repo = new PortalRepository(sql, ctx);
       return toAccountSummary(await repo.accountSummary());
+    },
+
+    /** Fas 13: kundens egna aktiva återkommande fakturor. */
+    async listTemplates(ctx: RequestContext) {
+      const repo = new PortalRepository(sql, ctx);
+      const rows = await repo.listActiveTemplates();
+      return rows.map(toPortalTemplate);
     },
 
     /**

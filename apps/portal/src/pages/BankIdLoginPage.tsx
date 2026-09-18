@@ -127,35 +127,40 @@ export function BankIdLoginPage() {
   }, [view]);
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-slate-50">
-      <div className="w-full max-w-sm rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
-        <h1 className="mb-6 text-xl font-semibold">Logga in med BankID</h1>
+    <div className="flex min-h-screen items-center justify-center bg-gradient-to-b from-cream-50 to-cream-100 px-4">
+      <div className="w-full max-w-sm rounded-2xl border border-ink-100 bg-white p-8 text-center shadow-lg shadow-ink-900/5">
+        <div className="mx-auto mb-6 flex h-10 w-10 items-center justify-center rounded-xl bg-ink-900">
+          <span className="text-sm font-bold text-mint-300">F</span>
+        </div>
+        <h1 className="mb-6 text-xl font-semibold tracking-tight text-ink-900">
+          Logga in med BankID
+        </h1>
 
-        {view.kind === "starting" && <p className="text-slate-500">Startar…</p>}
+        {view.kind === "starting" && <p className="text-mist-500">Startar…</p>}
 
         {view.kind === "pending" && (
           <>
-            <div className="mb-4 flex justify-center">
+            <div className="mb-4 flex justify-center rounded-xl border border-ink-100 bg-cream-50 p-4">
               {qrCode ? (
                 <QRCodeSVG value={qrCode} size={220} />
               ) : (
-                <div className="flex h-[220px] w-[220px] items-center justify-center text-slate-400">
+                <div className="flex h-[220px] w-[220px] items-center justify-center text-mist-400">
                   Laddar QR-kod…
                 </div>
               )}
             </div>
-            <p className="mb-4 text-sm text-slate-500">
+            <p className="mb-4 text-sm text-mist-500">
               Skanna QR-koden med BankID-appen på en annan enhet, eller öppna BankID direkt på den
               här enheten:
             </p>
             <a
               href={`bankid:///?autostarttoken=${view.autoStartToken}&redirect=null`}
-              className="mb-2 block w-full rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              className="mb-2 block w-full rounded-md bg-ink-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-ink-800"
             >
               Öppna BankID på den här enheten
             </a>
             {view.hintCode === "userSign" && (
-              <p className="mt-3 text-sm text-slate-500">Skriv din säkerhetskod i BankID-appen…</p>
+              <p className="mt-3 text-sm text-mist-500">Skriv din säkerhetskod i BankID-appen…</p>
             )}
           </>
         )}
@@ -166,15 +171,19 @@ export function BankIdLoginPage() {
             <button
               type="button"
               onClick={() => void start()}
-              className="w-full rounded bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              className="w-full rounded-md bg-ink-900 px-4 py-2.5 text-sm font-medium text-white shadow-sm transition hover:bg-ink-800"
             >
               Försök igen
             </button>
           </>
         )}
 
-        <p className="mt-6 text-sm text-slate-500">
-          <button type="button" onClick={() => navigate("/login")} className="underline">
+        <p className="mt-6 text-sm">
+          <button
+            type="button"
+            onClick={() => navigate("/login")}
+            className="font-medium text-ink-700 underline"
+          >
             Logga in med lösenord i stället
           </button>
         </p>

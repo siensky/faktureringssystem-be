@@ -130,6 +130,10 @@ async function main(): Promise<void> {
       // än att läsa en redan känd kund.
       // billing:portal:read (fas 12): en accountSummary-läsning per
       // länkat företag för kundens företagsöversikt.
+      // OBS: samma default-sträng står ÄVEN i services/auth/src/config.ts
+      // (AUTH_CLIENT_SCOPES) — de två kan inte importera varandra (skilda
+      // paket, seed har inget beroende på @faktura/shared). Uppdaterar du
+      // en, uppdatera den andra.
       scopes: (
         process.env.AUTH_CLIENT_SCOPES ??
         "billing:customer:read billing:customer:lookup billing:portal:read"

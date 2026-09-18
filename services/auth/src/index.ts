@@ -89,6 +89,7 @@ startService({
       redis: ctx.redis,
       config,
       provider: bankIdProvider,
+      logger,
     });
     registerBankIdRoutes(app, bankIdService, strictLimit, requireUser);
 

@@ -84,3 +84,9 @@ draft ──► sent ──► paid
 
 34. **En kreditfaktura (`invoice_type = 'credit_note'`) skapas av `POST /admin/invoices/:id/credit`** direkt i status `settled`, i samma transaktion som originalet sätts till `credited`. Den tar ett eget nummer ur samma serie (under samma radlås som utskick använder) och har negativa belopp — raderna är originalradernas färdigt avrundade belopp med ombytt tecken.
 35. **En kreditfaktura blir aldrig `overdue`**, plockas aldrig av påminnelsejobbet och räknas aldrig som utestående. Den har ändå `delivery_status` eftersom den skickas till kunden som PDF.
+
+## Återkommande fakturor (fas 13)
+
+36. **En mall (`invoice_templates`) är bara en frusen uppsättning framtida fakturarader** — `POST /admin/invoice-templates` skapar den, `POST /internal/automation/run` (den dagliga cronen, redan byggd i fas 6) genererar de faktiska fakturorna ur den, en i taget, och rullar fram `next_generation_date`. En genererad faktura är i alla avseenden en vanlig faktura (`invoice.sent` publiceras, samma dokument/mejl) — bara `parent_template_id` avslöjar varifrån den kom. `nextGenerationDate` får inte ligga i det förflutna vid skapande/redigering (mallen schemalägger en framtida fakturering, den backdaterar inte en redan levererad tjänst — det är vad ett vanligt utkast är till för).
+37. **Att pausa en mall (`isActive: false`) stoppar framtida generering utan att röra redan skickade fakturor.** Att radera en mall är permanent och orört av historiken (`parent_template_id` går till `NULL` på redan genererade fakturor, `ON DELETE SET NULL`) — ingen av delarna kräver att fakturorna den redan skapat ändras.
+38. **Kundportalen är skrivskyddad på mallar** (`GET /portal/invoice-templates`) — visar bara kundens egna AKTIVA mallar, aldrig en pausad. Bara backoffice kan skapa, ändra, pausa eller radera en mall.

@@ -6,9 +6,11 @@ import { withIdempotency } from "../idempotency";
 import type { InvoiceService } from "./services";
 import type {
   CreateInvoiceInput,
+  CreateInvoiceTemplateInput,
   DeliveryStatus,
   InvoiceStatus,
   UpdateInvoiceInput,
+  UpdateInvoiceTemplateInput,
 } from "./types";
 
 type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
@@ -115,6 +117,44 @@ export function createInvoiceControllers(service: InvoiceService, sql: Sql) {
           request.params.id,
         ),
       );
+    },
+
+    async createTemplate(
+      request: FastifyRequest<{ Body: CreateInvoiceTemplateInput }>,
+      reply: FastifyReply,
+    ) {
+      const ctx = contextOf(request);
+      const key = idempotencyKeyOf(request);
+      const outcome = await withIdempotency({
+        sql,
+        tenantId: ctx.tenantId,
+        key,
+        endpoint: "POST /admin/invoice-templates",
+        requestBody: request.body,
+        run: (tx) => service.createTemplateInTx(ctx, tx, request.body),
+      });
+      return reply.status(outcome.status).send(outcome.body);
+    },
+
+    async listTemplates(request: FastifyRequest, reply: FastifyReply) {
+      return reply.send(await service.listTemplates(contextOf(request)));
+    },
+
+    async getTemplate(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {
+      return reply.send(await service.getTemplate(contextOf(request), request.params.id));
+    },
+
+    async updateTemplate(
+      request: FastifyRequest<{ Params: { id: number }; Body: UpdateInvoiceTemplateInput }>,
+      reply: FastifyReply,
+    ) {
+      return reply.send(
+        await service.updateTemplate(contextOf(request), request.params.id, request.body),
+      );
+    },
+
+    async removeTemplate(request: FastifyRequest<{ Params: { id: number } }>, reply: FastifyReply) {
+      return reply.send(await service.removeTemplate(contextOf(request), request.params.id));
     },
   };
 }

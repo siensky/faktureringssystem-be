@@ -280,6 +280,7 @@ describe.skipIf(!RUN)("fas 2 e2e — M2M + BankID", () => {
       const body = (await collect.json()) as {
         status: string;
         accessToken: string;
+        refreshToken: string;
         companies: { tenantId: number; tenantName: string; customerId: number }[];
       };
       expect(body.status).toBe("complete");
@@ -299,6 +300,19 @@ describe.skipIf(!RUN)("fas 2 e2e — M2M + BankID", () => {
         companies?: { tenantId: number; tenantName: string; customerId: number }[];
       };
       expect(meBody.companies).toEqual([{ tenantId, tenantName: "BankID Test", customerId }]);
+
+      // Kritiskt regressionstest (kodgranskning fas 12): POST /auth/refresh
+      // läste tidigare users.tenant_id/customer_id rakt av — NULL för en
+      // BankID-kundidentitet — och gav "Kontot är avstängt" i stället för
+      // ett nytt token. refresh() ska nu läsa tenant/kund från
+      // user_tokens-raden (row.tenant_id) och user_company_links, inte
+      // från identitetens egen users-rad.
+      const refreshed = await post("/auth/refresh", { refreshToken: body.refreshToken });
+      expect(refreshed.status).toBe(200);
+      const refreshedBody = (await refreshed.json()) as { accessToken: string };
+      expect(decodeJwt(refreshedBody.accessToken).tenantId).toBe(tenantId);
+      expect(decodeJwt(refreshedBody.accessToken).customerId).toBe(customerId);
+      expect(decodeJwt(refreshedBody.accessToken).role).toBe("customer");
     });
 
     test("samma personnummer hos två tenants -> båda listas, byte av företag ger isolerad session", async () => {

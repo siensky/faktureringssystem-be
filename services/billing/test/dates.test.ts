@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { addDays, advanceByInterval, todayInStockholm } from "../src/domain/dates";
+import { addDays, advanceByInterval, dayOfMonth, todayInStockholm } from "../src/domain/dates";
 
 describe("todayInStockholm", () => {
   test("svensk sommartid ligger före UTC-midnatt", () => {
@@ -75,5 +75,19 @@ describe("advanceByInterval", () => {
     // "2026-03-28" — mars har 31 dagar och ska återhämta den sanna 31:an.
     const afterFeb = advanceByInterval(afterJan, "monthly", billingDay);
     expect(afterFeb).toBe("2026-03-31");
+  });
+});
+
+// Fas 13: mallens ankardygn (invoice_templates.billing_day) härleds från
+// admins valda nextGenerationDate vid skapande/redigering.
+describe("dayOfMonth", () => {
+  test("dagen i mitten av månaden", () => {
+    expect(dayOfMonth("2026-03-15")).toBe(15);
+  });
+  test("sista dagen i en lång månad", () => {
+    expect(dayOfMonth("2026-01-31")).toBe(31);
+  });
+  test("första dagen i månaden", () => {
+    expect(dayOfMonth("2026-07-01")).toBe(1);
   });
 });

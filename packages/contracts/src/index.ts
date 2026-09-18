@@ -37,6 +37,11 @@ export type {
   LineInputDto,
   CreateInvoiceInput,
   UpdateInvoiceInput,
+  RecurrenceInterval,
+  InvoiceTemplateSummaryDto,
+  InvoiceTemplateDetailDto,
+  CreateInvoiceTemplateInput,
+  UpdateInvoiceTemplateInput,
 } from "./rest/invoices";
 export type { UnmatchedTransactionDto, MatchBody, IgnoreBody } from "./rest/payments";
 export type {
@@ -45,6 +50,7 @@ export type {
   PortalInvoiceDetailDto,
   PortalInvoicePdfDto,
   PortalAccountSummaryDto,
+  PortalInvoiceTemplateDto,
   PortalPaymentSessionDto,
   CreateCustomerInviteInput,
   AcceptCustomerInviteInput,

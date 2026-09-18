@@ -5,9 +5,11 @@ import * as schema from "./schema";
 import type { InvoiceService } from "./services";
 import type {
   CreateInvoiceInput,
+  CreateInvoiceTemplateInput,
   DeliveryStatus,
   InvoiceStatus,
   UpdateInvoiceInput,
+  UpdateInvoiceTemplateInput,
 } from "./types";
 
 type ListQuery = { status?: InvoiceStatus; limit?: number; offset?: number };
@@ -66,6 +68,31 @@ export function registerInvoiceRoutes(
     "/admin/invoices/:id/credit",
     { ...u, schema: { params: schema.invoiceIdParams } },
     c.credit,
+  );
+
+  // Fas 13: återkommande fakturor. Genereringen (cronjobbet i automation/)
+  // fanns redan sedan fas 6 — det här är bara CRUD:et som saknades för att
+  // skapa en mall i första läget.
+  app.post<{ Body: CreateInvoiceTemplateInput }>(
+    "/admin/invoice-templates",
+    { ...u, schema: { body: schema.createInvoiceTemplateBody } },
+    c.createTemplate,
+  );
+  app.get("/admin/invoice-templates", u, c.listTemplates);
+  app.get<{ Params: { id: number } }>(
+    "/admin/invoice-templates/:id",
+    { ...u, schema: { params: schema.invoiceIdParams } },
+    c.getTemplate,
+  );
+  app.put<{ Params: { id: number }; Body: UpdateInvoiceTemplateInput }>(
+    "/admin/invoice-templates/:id",
+    { ...u, schema: { params: schema.invoiceIdParams, body: schema.updateInvoiceTemplateBody } },
+    c.updateTemplate,
+  );
+  app.delete<{ Params: { id: number } }>(
+    "/admin/invoice-templates/:id",
+    { ...u, schema: { params: schema.invoiceIdParams } },
+    c.removeTemplate,
   );
 
   app.get<{ Params: { id: number } }>(

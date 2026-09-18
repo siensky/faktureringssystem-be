@@ -29,18 +29,26 @@ import { writeAuditLog } from "../audit";
 import { CompanySettingsRepository } from "../company-settings/repository";
 import type { CompanySettingsRow } from "../company-settings/types";
 import type { CustomerService } from "../customers/services";
-import { addDays, advanceByInterval, todayInStockholm } from "../domain/dates";
+import { addDays, advanceByInterval, dayOfMonth, todayInStockholm } from "../domain/dates";
 import { type LineAmounts, computeLine, sumTotals } from "../domain/vat";
-import { buildSnapshotPayload, toDetail, toSummary } from "./mappers";
+import {
+  buildSnapshotPayload,
+  toDetail,
+  toSummary,
+  toTemplateDetail,
+  toTemplateSummary,
+} from "./mappers";
 import { type InsertItemData, InvoiceRepository } from "./repository";
 import type {
   CreateInvoiceInput,
+  CreateInvoiceTemplateInput,
   DeliveryStatus,
   InvoiceRow,
   InvoiceStatus,
   InvoiceTemplateRow,
   LineInputDto,
   UpdateInvoiceInput,
+  UpdateInvoiceTemplateInput,
 } from "./types";
 
 const SERVICE_NAME = "billing";
@@ -127,6 +135,39 @@ function assertDates(dateIssued: string, dateDue: string): void {
   if (dateDue < dateIssued) {
     throw new BadRequest("Förfallodatum kan inte vara före fakturadatum");
   }
+}
+
+/**
+ * Motsatt riktning mot assertDates: en mall SCHEMALÄGGER en framtida
+ * fakturering, den backdaterar inte en redan levererad tjänst (det är vad
+ * ett vanligt utkast är till för). Ett datum i det förflutna skulle bara
+ * ligga och vänta på att cronen "kommer ikapp" med ett förvirrande datum
+ * på den första genererade fakturan — enklare att avvisa det direkt.
+ */
+function assertTemplateDate(nextGenerationDate: string): void {
+  if (nextGenerationDate < todayInStockholm()) {
+    throw new BadRequest("Nästa fakturadatum kan inte ligga i det förflutna");
+  }
+}
+
+/** Samma momsvalidering (säkert heltalsintervall m.m.) som en vanlig fakturarad — kastar vid ogiltiga rader. */
+function assertValidLines(lines: LineInputDto[]): void {
+  sumTotals(toItems(lines).map(amountsOf));
+}
+
+/** Omlitererar raderna (ingen namngiven interface-typ) innan de skrivs som
+ *  JSONB — repo.insertTemplate/updateTemplate förväntar JsonObject, och en
+ *  namngiven interface (LineInputDto[] från ./types.ts eller kontraktets
+ *  egen) saknar den indexsignaturen. Samma knep som mappers.ts:s
+ *  toLineView, fast källan måste vara fräsch här, inte bara returvärdet. */
+function toJsonLines(lines: LineInputDto[]) {
+  return lines.map((l) => ({
+    description: l.description,
+    quantity: l.quantity,
+    unitPriceOre: l.unitPriceOre,
+    vatRate: l.vatRate,
+    unit: l.unit ?? "st",
+  }));
 }
 
 export function createInvoiceService(sql: Sql, customerService: CustomerService) {
@@ -733,6 +774,118 @@ export function createInvoiceService(sql: Sql, customerService: CustomerService)
       );
 
       return { created: true, invoiceId: invoice.id };
+    },
+
+    // --- Fas 13: admin-CRUD på mallar. Generatorn ovan (listDueTemplates/
+    // generateFromTemplateInTx) fanns redan sedan fas 6 — det som saknades
+    // var ett sätt att FÅ en mall att existera i första läget.
+
+    async createTemplateInTx(
+      ctx: RequestContext,
+      tx: TransactionSql,
+      input: CreateInvoiceTemplateInput,
+    ) {
+      const repo = invRepo(ctx);
+      const customer = await repo.findCustomer(input.customerId, tx);
+      if (!customer) throw new BadRequest("Okänd kund");
+
+      assertTemplateDate(input.nextGenerationDate);
+      assertValidLines(input.lines);
+
+      const row = await repo.insertTemplate(tx, {
+        customerId: customer.id,
+        interval: input.interval,
+        nextGenerationDate: input.nextGenerationDate,
+        billingDay: dayOfMonth(input.nextGenerationDate),
+        templateData: {
+          customerId: customer.id,
+          currency: input.currency ?? "SEK",
+          lines: toJsonLines(input.lines),
+        },
+      });
+      await writeAuditLog(tx, {
+        tenantId: ctx.tenantId,
+        actorUserId: ctx.userId,
+        action: "invoice_template.created",
+        resourceType: "invoice_template",
+        resourceId: String(row.id),
+        correlationId: ctx.correlationId,
+      });
+      return { status: 201, body: toTemplateDetail({ ...row, customer_name: customer.name }) };
+    },
+
+    async listTemplates(ctx: RequestContext) {
+      const rows = await invRepo(ctx).listTemplates();
+      return rows.map(toTemplateSummary);
+    },
+
+    async getTemplate(ctx: RequestContext, id: number) {
+      const row = await invRepo(ctx).findTemplateById(id);
+      if (!row) throw new NotFound("Mallen finns inte");
+      return toTemplateDetail(row);
+    },
+
+    async updateTemplate(ctx: RequestContext, id: number, input: UpdateInvoiceTemplateInput) {
+      return sql.begin(async (tx) => {
+        const repo = invRepo(ctx);
+        const current = await repo.findTemplateById(id, tx);
+        if (!current) throw new NotFound("Mallen finns inte");
+
+        const nextGenerationDate = input.nextGenerationDate ?? current.next_generation_date;
+        if (input.nextGenerationDate) assertTemplateDate(input.nextGenerationDate);
+        const lines = input.lines ?? current.template_data.lines;
+        assertValidLines(lines);
+
+        const interval = input.interval ?? current.interval;
+        const billingDay = input.nextGenerationDate
+          ? dayOfMonth(input.nextGenerationDate)
+          : current.billing_day;
+        const isActive = input.isActive ?? current.is_active;
+        const currency = input.currency ?? current.template_data.currency ?? "SEK";
+        const jsonLines = toJsonLines(lines);
+
+        await repo.updateTemplate(tx, id, {
+          interval,
+          nextGenerationDate,
+          billingDay,
+          templateData: { customerId: current.customer_id, currency, lines: jsonLines },
+          isActive,
+        });
+        await writeAuditLog(tx, {
+          tenantId: ctx.tenantId,
+          actorUserId: ctx.userId,
+          action: "invoice_template.updated",
+          resourceType: "invoice_template",
+          resourceId: String(id),
+          correlationId: ctx.correlationId,
+        });
+        return toTemplateDetail({
+          ...current,
+          interval,
+          next_generation_date: nextGenerationDate,
+          billing_day: billingDay,
+          is_active: isActive,
+          template_data: { customerId: current.customer_id, currency, lines: jsonLines },
+        });
+      });
+    },
+
+    async removeTemplate(ctx: RequestContext, id: number) {
+      return sql.begin(async (tx) => {
+        const repo = invRepo(ctx);
+        const current = await repo.findTemplateById(id, tx);
+        if (!current) throw new NotFound("Mallen finns inte");
+        await repo.deleteTemplate(tx, id);
+        await writeAuditLog(tx, {
+          tenantId: ctx.tenantId,
+          actorUserId: ctx.userId,
+          action: "invoice_template.deleted",
+          resourceType: "invoice_template",
+          resourceId: String(id),
+          correlationId: ctx.correlationId,
+        });
+        return { status: "ok" as const };
+      });
     },
   };
 }

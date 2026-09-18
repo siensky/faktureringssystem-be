@@ -83,7 +83,15 @@ export function createBankIdRepository(sql: Sql) {
         FROM user_company_links l
         JOIN tenants t ON t.id = l.tenant_id
         WHERE l.user_id = ${userId}
-        ORDER BY l.last_used_at DESC NULLS LAST, l.created_at ASC
+        -- id ASC som sista tiebreak: syncCompanyLinks upsertar flera länkar
+        -- i SAMMA transaktion, så created_at kan bli identisk för alla
+        -- (Postgres now() är fryst per transaktion) vid en persons FÖRSTA
+        -- inloggning med träff hos flera tenants samtidigt. Utan en
+        -- deterministisk sista tiebreak vore vilken länk som blir den
+        -- aktiva sessionen (collect()s links[0]) odefinierat (kodgranskning
+        -- fas 12). id är GENERATED ALWAYS AS IDENTITY — stigande i
+        -- insättningsordning, alltid unikt.
+        ORDER BY l.last_used_at DESC NULLS LAST, l.created_at ASC, l.id ASC
       `;
     },
 
@@ -115,3 +123,5 @@ export function createBankIdRepository(sql: Sql) {
     },
   };
 }
+
+export type BankIdRepository = ReturnType<typeof createBankIdRepository>;

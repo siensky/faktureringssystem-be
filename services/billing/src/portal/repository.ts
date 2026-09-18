@@ -10,7 +10,12 @@
 
 import { TenantScopedRepository } from "@faktura/shared";
 import type { Sql } from "postgres";
-import type { AccountSummaryRow, PortalInvoiceItemRow, PortalInvoiceRow } from "./types";
+import type {
+  AccountSummaryRow,
+  PortalInvoiceItemRow,
+  PortalInvoiceRow,
+  PortalInvoiceTemplateRow,
+} from "./types";
 
 export class PortalRepository extends TenantScopedRepository {
   constructor(
@@ -77,5 +82,16 @@ export class PortalRepository extends TenantScopedRepository {
         AND i.status IN ('sent', 'overdue')
     `;
     return row ?? { outstanding_ore: "0", outstanding_count: 0 };
+  }
+
+  /** Fas 13: kundens egna aktiva återkommande fakturor — bara till för att visa dem, ingen skrivväg. */
+  async listActiveTemplates(): Promise<PortalInvoiceTemplateRow[]> {
+    return this.sql<PortalInvoiceTemplateRow[]>`
+      SELECT id, interval, next_generation_date::text AS next_generation_date,
+             is_active, template_data
+      FROM invoice_templates
+      WHERE tenant_id = ${this.tenantId} AND customer_id = ${this.customerId} AND is_active
+      ORDER BY next_generation_date
+    `;
   }
 }

@@ -4,6 +4,7 @@
 // (planens Personnummer-avsnitt) och lagras aldrig i klartext.
 
 import { Forbidden, Unauthorized, hmacField, normalizePnr } from "@faktura/shared";
+import type { Logger } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import {
@@ -15,17 +16,27 @@ import type { config as Config } from "../config";
 import { createSessionIssuer } from "../session";
 import { assertInitRate, recordLoginFailure } from "../throttle";
 import type { BankIdProvider, CollectResult } from "./provider";
-import { createBankIdRepository } from "./repository";
+import { type BankIdRepository, createBankIdRepository } from "./repository";
 
 interface Deps {
   sql: Sql;
   redis: Redis;
   config: typeof Config;
   provider: BankIdProvider;
+  logger?: Logger;
+  // Injicerbara, defaultar till de riktiga implementationerna — precis som
+  // RealBankIdProvider tar ett valfritt test-transport (fas 11). Ändrar
+  // inget produktionsbeteende, bara vad som går att byta ut i test utan en
+  // riktig databas (kodgranskning fas 12).
+  repo?: BankIdRepository;
+  findCustomersByPnrHmac?: typeof findCustomersByPnrHmac;
+  getPortalAccountSummary?: typeof getPortalAccountSummary;
 }
 
 export function createBankIdService(deps: Deps) {
-  const repo = createBankIdRepository(deps.sql);
+  const repo = deps.repo ?? createBankIdRepository(deps.sql);
+  const lookupCustomersByPnrHmac = deps.findCustomersByPnrHmac ?? findCustomersByPnrHmac;
+  const fetchAccountSummary = deps.getPortalAccountSummary ?? getPortalAccountSummary;
   const sessionIssuer = createSessionIssuer({ sql: deps.sql, config: deps.config });
 
   return {
@@ -69,7 +80,7 @@ export function createBankIdService(deps: Deps) {
       const pnr = normalizePnr(result.completionData!.personalNumber);
       const pnrHash = hmacField(pnr, deps.config.pnrHmacKey);
 
-      const matches = await findCustomersByPnrHmac(deps.redis, pnrHash, correlationId);
+      const matches = await lookupCustomersByPnrHmac(deps.redis, pnrHash, correlationId);
       const activeMatches: CustomerCompanyMatch[] = [];
       for (const match of matches) {
         if ((await repo.getTenantStatus(match.tenantId)) === "active") {
@@ -141,12 +152,17 @@ export function createBankIdService(deps: Deps) {
      * PortalService är helt oförändrade, se services/billing/src/portal/).
      * Tom lista för en lösenordskund (inga rader i user_company_links) —
      * inget fel, bara en tom översikt.
+     *
+     * allSettled, inte all: ett trögt/trasigt företag ska inte dölja de
+     * andra — kunden ser sina fungerande bolag i stället för ett totalt
+     * fel för alla (kodgranskning fas 12). Ett misslyckat företag loggas
+     * och utelämnas tyst ur listan snarare än att krascha hela anropet.
      */
     async overview(userId: number, correlationId: string) {
       const links = await repo.listCompanyLinks(userId);
-      const companies = await Promise.all(
+      const results = await Promise.allSettled(
         links.map(async (link) => {
-          const summary = await getPortalAccountSummary(
+          const summary = await fetchAccountSummary(
             deps.redis,
             link.tenant_id,
             link.customer_id,
@@ -161,6 +177,17 @@ export function createBankIdService(deps: Deps) {
           };
         }),
       );
+      const companies = [];
+      for (const [i, result] of results.entries()) {
+        if (result.status === "fulfilled") {
+          companies.push(result.value);
+        } else {
+          deps.logger?.warn(
+            { err: result.reason, tenantId: links[i]?.tenant_id, correlationId },
+            "företagsöversikt: kunde inte hämta accountSummary för ett länkat företag, utelämnar det",
+          );
+        }
+      }
       return { companies };
     },
   };

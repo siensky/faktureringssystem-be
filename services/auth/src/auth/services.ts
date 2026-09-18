@@ -185,16 +185,20 @@ export function createAuthService(deps: Deps) {
 
     /** Fas 8: GET /auth/me. userId/tenantId kommer redan verifierade ur access-token. */
     async me(ctx: RequestContext) {
-      // Fas 12: en BankID-kundidentitet har users.tenant_id = NULL, så
+      // Fas 12: en BankID-kundidentitets users.tenant_id är NULL, så
       // huvudvägen (WHERE u.tenant_id = tenantId) matchar aldrig en sådan
       // rad — se findBankIdCustomerContext.
-      const row =
-        (await repo.findUserWithTenantById(ctx.userId, ctx.tenantId)) ??
-        (await repo.findBankIdCustomerContext(ctx.userId, ctx.tenantId));
+      const primary = await repo.findUserWithTenantById(ctx.userId, ctx.tenantId);
+      const row = primary ?? (await repo.findBankIdCustomerContext(ctx.userId, ctx.tenantId));
       if (!row) throw new NotFound("Användaren finns inte");
 
-      const companies =
-        row.role === "customer" ? await bankIdRepo.listCompanyLinks(ctx.userId) : undefined;
+      // Bara en BankID-kundidentitet kan vara länkad till flera företag —
+      // och just det är signalen att veta att det ÄR en, utan en extra
+      // auth_method-kolumn: primary matchar per konstruktion aldrig en
+      // sådan rad, så att den missade betyder att reservvägen gjorde det.
+      // Undviker en extra DB-fråga för varje lösenordskund (kodgranskning
+      // fas 12) — role === "customer" ensamt skulle triggat den även för dem.
+      const companies = !primary ? await bankIdRepo.listCompanyLinks(ctx.userId) : undefined;
       return toCurrentUserView(row, companies?.length ? companies : undefined);
     },
 
@@ -214,7 +218,28 @@ export function createAuthService(deps: Deps) {
 
       const user = await repo.findUserById(row.user_id);
       if (!user) throw new Unauthorized("Användaren finns inte");
-      await assertTenantActive(user.tenant_id);
+      // Fas 12: user.tenant_id är NULL på en BankID-kundidentitets egen rad
+      // (den har ingen "hemma-tenant", bara länkar) — den SESSIONEN hör
+      // till tenanten är row.tenant_id, redan korrekt satt av
+      // sessionIssuer.issue() när tokenet först utfärdades (session.ts).
+      // Samma rättning som GET /auth/me fick (findBankIdCustomerContext).
+      await assertTenantActive(row.tenant_id);
+
+      // Av samma skäl: users.customer_id är också NULL för en BankID-
+      // kundidentitet — kundkopplingen för DEN HÄR tenanten ligger i
+      // user_company_links, inte på identitetens egen rad.
+      const customerId =
+        user.customer_id ??
+        (user.role === "customer"
+          ? (await bankIdRepo.findLink(user.id, row.tenant_id))?.customer_id
+          : undefined);
+      if (user.role === "customer" && customerId == null) {
+        // Länken till den här tenanten är borta sedan tokenet utfärdades
+        // (t.ex. kunden borttagen, se syncCompanyLinks) — ett nytt token
+        // för en kundkoppling som inte längre finns vore meningslöst och
+        // skulle ändå avvisas av verifyAccessToken på nästa anrop.
+        throw new Forbidden("Kontot är inte längre kopplat till det här företaget");
+      }
 
       const newRefresh = await sql.begin(async (tx) => {
         // Rotationen är atomär: markera förbrukat OCH utfärda nytt i samma
@@ -224,14 +249,14 @@ export function createAuthService(deps: Deps) {
           await repo.revokeTokens(tx, row.user_id, "refresh");
           throw new Unauthorized("Token återanvänt — alla sessioner avslutade");
         }
-        return issueTokenRow(user.id, user.tenant_id, "refresh", config.refreshTtlSeconds, tx);
+        return issueTokenRow(user.id, row.tenant_id, "refresh", config.refreshTtlSeconds, tx);
       });
       const accessToken = await signAccessToken(
         {
           userId: user.id,
-          tenantId: user.tenant_id,
+          tenantId: row.tenant_id,
           role: user.role,
-          ...(user.customer_id != null ? { customerId: user.customer_id } : {}),
+          ...(customerId != null ? { customerId } : {}),
         },
         config.jwtUserSecret,
       );

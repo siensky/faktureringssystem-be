@@ -23,6 +23,11 @@ export function addDays(isoDate: string, n: number): string {
   return shifted.toISOString().slice(0, 10);
 }
 
+/** Dagen i månaden (1-31) ur ett 'YYYY-MM-DD'-datum — mallens ankardygn (billing_day). */
+export function dayOfMonth(isoDate: string): number {
+  return Number(isoDate.split("-")[2]);
+}
+
 export type RecurrenceInterval = "monthly" | "quarterly" | "yearly";
 
 const MONTHS_PER_INTERVAL: Record<RecurrenceInterval, number> = {

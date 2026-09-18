@@ -1,4 +1,5 @@
-import type { DeliveryStatus, InvoiceStatus, InvoiceType } from "../invoices/types";
+import type { RecurrenceInterval } from "../domain/dates";
+import type { DeliveryStatus, InvoiceStatus, InvoiceType, TemplateData } from "../invoices/types";
 
 // Samma rader som billings egna InvoiceRow/InvoiceItemRow (invoices/types.ts)
 // — portalen läser samma tabeller, bara kund-scopade i stället för admin-
@@ -38,4 +39,13 @@ export interface PortalInvoiceItemRow {
 export interface AccountSummaryRow {
   outstanding_ore: string;
   outstanding_count: number;
+}
+
+/** Fas 13: kundens egna (aktiva) mallar — read-only läsvy, portalen skapar/ändrar aldrig en. */
+export interface PortalInvoiceTemplateRow {
+  id: number;
+  interval: RecurrenceInterval;
+  next_generation_date: string;
+  is_active: boolean;
+  template_data: TemplateData;
 }

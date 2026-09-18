@@ -27,6 +27,10 @@ export function createPortalControllers(service: PortalService) {
       return reply.send(await service.accountSummary(contextOf(request)));
     },
 
+    async listTemplates(request: FastifyRequest, reply: FastifyReply) {
+      return reply.send(await service.listTemplates(contextOf(request)));
+    },
+
     /**
      * S2S (fas 12) — auth har redan slagit upp (tenantId, customerId) via
      * user_company_links, X-Tenant-Id KRÄVS här (till skillnad från

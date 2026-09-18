@@ -30,6 +30,7 @@ export function registerPortalRoutes(
     c.getPdfUrl,
   );
   app.get("/portal/account-summary", u, c.accountSummary);
+  app.get("/portal/invoice-templates", u, c.listTemplates);
   app.post<{ Params: { id: number } }>(
     "/portal/invoices/:id/pay",
     { ...u, schema: { params: schema.invoiceIdParams } },

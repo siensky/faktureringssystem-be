@@ -100,3 +100,34 @@ export const byOcrQuery = {
   required: ["ocr"],
   properties: { ocr: { type: "string", pattern: "^[0-9]{3,30}$" } },
 } as const;
+
+// Fas 13: återkommande fakturor. Samma `line`/`lines`/`currency` som
+// fakturaskapandet ovan — en mall är bara en frusen uppsättning framtida
+// fakturarader, gränserna ska inte kunna glida isär.
+const recurrenceInterval = { type: "string", enum: ["monthly", "quarterly", "yearly"] } as const;
+
+export const createInvoiceTemplateBody = {
+  type: "object",
+  additionalProperties: false,
+  required: ["customerId", "interval", "nextGenerationDate", "lines"],
+  properties: {
+    customerId: { type: "integer", minimum: 1 },
+    interval: recurrenceInterval,
+    nextGenerationDate: isoDate,
+    currency,
+    lines,
+  },
+} as const;
+
+export const updateInvoiceTemplateBody = {
+  type: "object",
+  additionalProperties: false,
+  minProperties: 1,
+  properties: {
+    interval: recurrenceInterval,
+    nextGenerationDate: isoDate,
+    currency,
+    lines,
+    isActive: { type: "boolean" },
+  },
+} as const;
