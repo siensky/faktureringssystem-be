@@ -198,6 +198,13 @@ export function createStripeService(opts: {
         return { handled: true };
       });
     },
+
+    /** Bara för mock-checkout-sidan (GET /mock-checkout/:id) — visar
+     *  belopp/valuta och om sessionen redan är betald. Registreras aldrig
+     *  när STRIPE_PROVIDER=real (index.ts), så det här är dött i produktion. */
+    async getSessionForMockCheckout(sessionId: string) {
+      return repo.findBySessionId(sessionId);
+    },
   };
 }
 

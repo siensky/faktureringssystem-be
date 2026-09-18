@@ -18,7 +18,8 @@ export type { PaymentPartialPayload } from "./generated/payment-partial";
 
 // REST-typer (fas 8, handskrivna — inget schema/codegen för dem ännu).
 // Delas mellan backend-mapparna och apps/backoffice.
-export type { UserRole, CurrentUserDto } from "./rest/auth";
+export type { UserRole, CurrentUserDto, CompanyLinkDto } from "./rest/auth";
+export type { CompanyOverviewEntry, CompanyOverviewDto } from "./rest/company-overview";
 export type {
   CustomerType,
   CustomerDto,
@@ -36,6 +37,11 @@ export type {
   LineInputDto,
   CreateInvoiceInput,
   UpdateInvoiceInput,
+  RecurrenceInterval,
+  InvoiceTemplateSummaryDto,
+  InvoiceTemplateDetailDto,
+  CreateInvoiceTemplateInput,
+  UpdateInvoiceTemplateInput,
 } from "./rest/invoices";
 export type { UnmatchedTransactionDto, MatchBody, IgnoreBody } from "./rest/payments";
 export type {
@@ -44,6 +50,7 @@ export type {
   PortalInvoiceDetailDto,
   PortalInvoicePdfDto,
   PortalAccountSummaryDto,
+  PortalInvoiceTemplateDto,
   PortalPaymentSessionDto,
   CreateCustomerInviteInput,
   AcceptCustomerInviteInput,

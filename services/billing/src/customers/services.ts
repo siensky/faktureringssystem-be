@@ -19,7 +19,7 @@ import {
 import type { Sql, TransactionSql } from "postgres";
 import { writeAuditLog } from "../audit";
 import { toInternalView, toView } from "./mappers";
-import { CustomerRepository } from "./repository";
+import { CustomerRepository, findCustomersByPnrHmac } from "./repository";
 import type { CreateCustomerInput, UpdateCustomerInput } from "./types";
 
 interface Deps {
@@ -196,6 +196,18 @@ export function createCustomerService(deps: Deps) {
       const row = await repo(ctx).findById(id);
       if (!row) throw new NotFound("Kunden finns inte");
       return toInternalView(row);
+    },
+
+    /**
+     * Fas 12: tenant-övergripande uppslag för BankID-igenkänning. Ingen
+     * NotFound på noll träffar — en tom lista är ett giltigt, förväntat
+     * svar (personen är helt enkelt inte kund någonstans än), inte ett fel.
+     * Eget namn, skilt från repository-funktionen den anropar (samma
+     * disciplin som resolveTenantByBankgiro/findTenantIdByBankgiro) — annars
+     * skuggar metodnamnet den importerade funktionen den anropar.
+     */
+    async lookupByPnrHmac(pnrHmac: string) {
+      return findCustomersByPnrHmac(deps.sql, pnrHmac);
     },
   };
 }

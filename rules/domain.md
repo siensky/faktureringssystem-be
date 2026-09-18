@@ -54,7 +54,7 @@ draft ──► sent ──► paid
 
 ## Inloggning
 
-22. **En lyckad BankID-signering skapar aldrig ett konto.** Finns ingen matchande `pnr_hash` blir det `401`. Annars kan vem som helst med BankID skaffa sig åtkomst till vilket företag som helst.
+22. **En lyckad BankID-signering skapar aldrig en `customers`-rad** — en affärsrelation skapas bara av en admin. Den FÅR skapa en `users`-inloggningsidentitet, en gång, vid första igenkänningen — om personnumret matchar minst en privat kundrad hos NÅGON tenant (fas 12). Ingen matchning alls hos någon tenant ger `401`, ingen rad skapas. Annars kan vem som helst med BankID skaffa sig åtkomst till vilket företag som helst. **En sådan identitet kan vara länkad till flera företag samtidigt** (`user_company_links`) — samma person kan vara privatkund hos flera tenants. Varje utfärdad session gäller ändå exakt ett företag åt gången, precis som en vanlig kundinloggning; att byta aktivt företag kräver ett eget anrop (`POST /auth/companies/switch`) som verifieras mot länktabellen server-side, aldrig ett klient-hävdat tenant-id.
 
 ## Utskick
 
@@ -84,3 +84,9 @@ draft ──► sent ──► paid
 
 34. **En kreditfaktura (`invoice_type = 'credit_note'`) skapas av `POST /admin/invoices/:id/credit`** direkt i status `settled`, i samma transaktion som originalet sätts till `credited`. Den tar ett eget nummer ur samma serie (under samma radlås som utskick använder) och har negativa belopp — raderna är originalradernas färdigt avrundade belopp med ombytt tecken.
 35. **En kreditfaktura blir aldrig `overdue`**, plockas aldrig av påminnelsejobbet och räknas aldrig som utestående. Den har ändå `delivery_status` eftersom den skickas till kunden som PDF.
+
+## Återkommande fakturor (fas 13)
+
+36. **En mall (`invoice_templates`) är bara en frusen uppsättning framtida fakturarader** — `POST /admin/invoice-templates` skapar den, `POST /internal/automation/run` (den dagliga cronen, redan byggd i fas 6) genererar de faktiska fakturorna ur den, en i taget, och rullar fram `next_generation_date`. En genererad faktura är i alla avseenden en vanlig faktura (`invoice.sent` publiceras, samma dokument/mejl) — bara `parent_template_id` avslöjar varifrån den kom. `nextGenerationDate` får inte ligga i det förflutna vid skapande/redigering (mallen schemalägger en framtida fakturering, den backdaterar inte en redan levererad tjänst — det är vad ett vanligt utkast är till för).
+37. **Att pausa en mall (`isActive: false`) stoppar framtida generering utan att röra redan skickade fakturor.** Att radera en mall är permanent och orört av historiken (`parent_template_id` går till `NULL` på redan genererade fakturor, `ON DELETE SET NULL`) — ingen av delarna kräver att fakturorna den redan skapat ändras.
+38. **Kundportalen är skrivskyddad på mallar** (`GET /portal/invoice-templates`) — visar bara kundens egna AKTIVA mallar, aldrig en pausad. Bara backoffice kan skapa, ändra, pausa eller radera en mall.

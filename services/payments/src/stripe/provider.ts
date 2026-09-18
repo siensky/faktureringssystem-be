@@ -44,17 +44,31 @@ export interface StripeProvider {
 const MOCK_SESSION_TTL_MS = 24 * 60 * 60 * 1000;
 
 /**
- * Ingen nätverksanrop. sessionId är deterministisk (härledd ur tenant+
- * faktura, inte slumpad) så ett e2e-test kan skapa en session och sedan
- * bygga ett matchande simulerat webhook-event utan att behöva läsa
+ * Ingen nätverksanrop till Stripe. sessionId är deterministisk (härledd ur
+ * tenant+faktura, inte slumpad) så ett e2e-test kan skapa en session och
+ * sedan bygga ett matchande simulerat webhook-event utan att behöva läsa
  * tillbaka id:t ur ett API-svar den inte litar på i förväg.
+ *
+ * url:en pekar på en RIKTIG sida (mock-checkout.ts, registrerad bara när
+ * STRIPE_PROVIDER=mock) i stället för den gamla platshållar-domänen
+ * ("https://checkout.stripe.test/...", som aldrig existerat och gav "site
+ * can't be reached" så fort en kund faktiskt klickade "Betala nu" i en
+ * riktig webbläsare) — e2e-sviten simulerar ändå webhook-eventet direkt
+ * mot POST /webhooks/stripe och besöker aldrig url:en, så det ändrar inget
+ * där.
  */
 export class MockStripeProvider implements StripeProvider {
+  constructor(private readonly gatewayBaseUrl: string) {}
+
   async createCheckoutSession(params: CreateCheckoutSessionParams): Promise<CheckoutSession> {
     const sessionId = `cs_test_mock_${params.tenantId}_${params.invoiceId}_${Date.now()}`;
+    const query = new URLSearchParams({
+      success_url: params.successUrl,
+      cancel_url: params.cancelUrl,
+    });
     return {
       sessionId,
-      url: `https://checkout.stripe.test/mock/${sessionId}`,
+      url: `${this.gatewayBaseUrl}/mock-checkout/${sessionId}?${query.toString()}`,
       expiresAt: new Date(Date.now() + MOCK_SESSION_TTL_MS),
     };
   }

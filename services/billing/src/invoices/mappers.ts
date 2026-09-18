@@ -2,11 +2,18 @@
 // #8). Snapshoten är undantaget: den är den frusna interna posten som
 // documents renderar PDF ur, och håller öre kvar som öre för exakthet.
 
-import type { InvoiceDetailDto, InvoiceLineDto, InvoiceSummaryDto } from "@faktura/contracts";
+import type {
+  InvoiceDetailDto,
+  InvoiceLineDto,
+  InvoiceSummaryDto,
+  InvoiceTemplateDetailDto,
+  InvoiceTemplateSummaryDto,
+} from "@faktura/contracts";
 import type { JsonObject } from "@faktura/shared";
 import type { CompanySettingsRow } from "../company-settings/types";
 import type { CustomerRow } from "../customers/types";
-import type { InvoiceListRow } from "./repository";
+import { computeLine, sumTotals } from "../domain/vat";
+import type { InvoiceListRow, InvoiceTemplateListRow } from "./repository";
 import type { InvoiceItemRow, InvoiceRow } from "./types";
 
 const kr = (ore: string | number): number => Number(ore) / 100;
@@ -61,6 +68,50 @@ export function toDetail(row: InvoiceListRow, items: InvoiceItemRow[], paidOre: 
     supersededByInvoiceId: row.superseded_by_invoice_id,
     lines: items.map(toLineView),
   } satisfies InvoiceDetailDto;
+}
+
+/** Samma momsberäkning som en riktig faktura (domain/vat.ts), bara för att
+ *  visa ett förhandsbelopp i mall-listan — mallen bär inga egna öresfält,
+ *  bara de råa radangivelserna (template_data.lines). */
+function templateTotalInclVat(lines: InvoiceTemplateListRow["template_data"]["lines"]): number {
+  const amounts = lines.map((line) => computeLine(line));
+  return kr(sumTotals(amounts).totalInclVatOre);
+}
+
+// Ingen explicit returtyp på dessa två (samma avvikelse-motivering som
+// toLineView/toSummary/toDetail ovan): toTemplateDetail() flödar in i
+// IdempotencyOutcome.body (JsonValue) via createTemplateInTx, och en
+// namngiven interface saknar den indexsignaturen — satisfies ger samma
+// kompileringsskydd utan det problemet.
+export function toTemplateSummary(row: InvoiceTemplateListRow) {
+  return {
+    id: row.id,
+    customerId: row.customer_id,
+    customerName: row.customer_name,
+    interval: row.interval,
+    nextGenerationDate: row.next_generation_date,
+    isActive: row.is_active,
+    currency: row.template_data.currency ?? "SEK",
+    totalInclVat: templateTotalInclVat(row.template_data.lines),
+  } satisfies InvoiceTemplateSummaryDto;
+}
+
+export function toTemplateDetail(row: InvoiceTemplateListRow) {
+  return {
+    ...toTemplateSummary(row),
+    // Omlitererade (ingen namngiven interface-typ) av samma skäl som
+    // toLineView ovan: row.template_data.lines är LineInputDto[] från
+    // ./types.ts, och en namngiven interface saknar den indexsignatur
+    // JsonValue-kompatibiliteten kräver längre ut (createTemplateInTx:s
+    // IdempotencyOutcome.body).
+    lines: row.template_data.lines.map((l) => ({
+      description: l.description,
+      quantity: l.quantity,
+      unitPriceOre: l.unitPriceOre,
+      vatRate: l.vatRate,
+      unit: l.unit ?? "st",
+    })),
+  } satisfies InvoiceTemplateDetailDto;
 }
 
 /** Frusen kopia för PDF-rendering. Id:n + råa öre, självständig av levande tabeller. */

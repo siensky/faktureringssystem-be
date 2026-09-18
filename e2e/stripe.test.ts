@@ -164,7 +164,10 @@ describe.skipIf(!RUN)("fas 10 e2e — Stripe-betalning", () => {
     });
     expect(res.status).toBe(201);
     const { url } = (await res.json()) as { url: string };
-    expect(url).toContain("checkout.stripe.test");
+    // Fas 13: mock-checkout.ts — en riktig, besökbar sida i stället för
+    // den gamla platshållar-domänen "checkout.stripe.test" (som aldrig
+    // existerat och gav "site can't be reached" i en riktig webbläsare).
+    expect(url).toContain("/mock-checkout/");
 
     const [row] = await sql<{ amount_ore: string; invoice_id: number }[]>`
       SELECT amount_ore, invoice_id FROM stripe_payments

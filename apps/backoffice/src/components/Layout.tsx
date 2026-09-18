@@ -3,6 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 
 const NAV_ITEMS = [
   { to: "/invoices", label: "Fakturor" },
+  { to: "/invoice-templates", label: "Återkommande fakturor" },
   { to: "/customers", label: "Kunder" },
   { to: "/deliveries", label: "Leveranser" },
   { to: "/payments/unmatched", label: "Betalningar" },

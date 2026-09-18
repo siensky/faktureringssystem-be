@@ -82,3 +82,40 @@ export interface UpdateInvoiceInput {
   currency?: string;
   lines?: LineInputDto[];
 }
+
+// Fas 13: återkommande fakturor (admin-CRUD på invoice_templates — själva
+// genereringen fanns redan sedan fas 6). En mall bär inga egna öresfält,
+// bara samma LineInputDto[] som en fakturas skapande gör; totalInclVat är
+// ett förhandsbelopp servern räknar fram för visning.
+export type RecurrenceInterval = "monthly" | "quarterly" | "yearly";
+
+export interface InvoiceTemplateSummaryDto {
+  id: number;
+  customerId: number;
+  customerName: string;
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  isActive: boolean;
+  currency: string;
+  totalInclVat: number;
+}
+
+export interface InvoiceTemplateDetailDto extends InvoiceTemplateSummaryDto {
+  lines: LineInputDto[];
+}
+
+export interface CreateInvoiceTemplateInput {
+  customerId: number;
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  currency?: string;
+  lines: LineInputDto[];
+}
+
+export interface UpdateInvoiceTemplateInput {
+  interval?: RecurrenceInterval;
+  nextGenerationDate?: string;
+  currency?: string;
+  lines?: LineInputDto[];
+  isActive?: boolean;
+}

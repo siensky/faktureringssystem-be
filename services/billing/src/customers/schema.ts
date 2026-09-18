@@ -64,3 +64,13 @@ export const listQuery = {
     offset: { type: "integer", minimum: 0 },
   },
 } as const;
+
+// Fas 12: hex-sträng, HMAC-SHA256 (samma format som customers.pnr_hmac).
+// Grov formkontroll — ett värde som inte matchar någon kund ger bara en
+// tom träfflista, aldrig 404 (ingen tenant är känd att svara "hos den" om).
+export const byPnrHmacQuery = {
+  type: "object",
+  additionalProperties: false,
+  required: ["pnrHmac"],
+  properties: { pnrHmac: { type: "string", pattern: "^[0-9a-f]{64}$" } },
+} as const;

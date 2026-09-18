@@ -104,7 +104,7 @@ startService({
     // (två lager åtkomstkontroll: tenant OCH customerId, domain.md #32),
     // plus en S2S-läsning mot documents för PDF-URL:en.
     const portalService = createPortalService(sql, ctx.redis);
-    registerPortalRoutes(app, portalService, { customerChain });
+    registerPortalRoutes(app, portalService, { customerChain, requireService });
 
     // Fas 6: dagligt automatiseringsjobb (overdue, påminnelser, återkommande
     // fakturor, städning) kl. 03:00 Europe/Stockholm, plus en skyddad

@@ -177,7 +177,7 @@ jobs:
           BILLING_CLIENT_SCOPES=payments:ops:read documents:pdf:read payments:stripe:checkout
           AUTH_CLIENT_ID=svc-auth
           AUTH_CLIENT_SECRET=ci_auth_client_secret_not_a_real_secret_000000
-          AUTH_CLIENT_SCOPES=billing:customer:read
+          AUTH_CLIENT_SCOPES=billing:customer:read billing:customer:lookup billing:portal:read
           CUSTOMER_INVITE_TTL_DAYS=7
           STRIPE_PROVIDER=mock
           STRIPE_SECRET_KEY=

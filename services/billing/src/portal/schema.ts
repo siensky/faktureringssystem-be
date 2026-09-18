@@ -15,3 +15,13 @@ export const invoiceIdParams = {
   required: ["id"],
   properties: { id: { type: "integer", minimum: 1 } },
 } as const;
+
+// Fas 12: S2S-variant av GET /portal/account-summary — customerId kommer
+// in explicit i stället för via en kundinloggnings JWT-claim, eftersom
+// anroparen (auth) redan har slagit upp kunden via user_company_links.
+export const accountSummaryInternalQuery = {
+  type: "object",
+  additionalProperties: false,
+  required: ["customerId"],
+  properties: { customerId: { type: "integer", minimum: 1 } },
+} as const;

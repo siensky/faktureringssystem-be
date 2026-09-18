@@ -53,9 +53,14 @@ const optional = loadEnvWithDefaults({
   BANKID_CERT_PATH: "",
   BANKID_CERT_PASSPHRASE: "",
   BANKID_CA_PATH: "",
-  // Minsta möjliga scope (architecture.md #18): auth anropar bara
-  // GET /internal/customers/:id.
-  AUTH_CLIENT_SCOPES: "billing:customer:read",
+  // billing:customer:read (fas 9), billing:customer:lookup + billing:portal:read
+  // (fas 12, BankID-igenkänning tenant-övergripande) — minsta möjliga
+  // scope per (architecture.md #18).
+  // OBS: samma default-sträng står ÄVEN i infra/seed/seed.ts (som seedar
+  // den faktiska service_clients-raden) — de två kan inte importera
+  // varandra (skilda paket, seed har inget beroende på @faktura/shared),
+  // så håll dem i synk för hand. Uppdaterar du en, uppdatera den andra.
+  AUTH_CLIENT_SCOPES: "billing:customer:read billing:customer:lookup billing:portal:read",
 });
 
 function trimTrailingSlash(url: string): string {

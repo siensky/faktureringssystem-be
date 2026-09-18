@@ -54,5 +54,18 @@ export function createCustomerControllers(service: CustomerService, sql: Sql) {
         ),
       );
     },
+
+    /**
+     * S2S — till skillnad från getInternal anropas INTE requireTenantHeader
+     * här: tenanten är okänd, det är precis vad uppslaget ska avgöra
+     * (fas 12).
+     */
+    async byPnrHmac(
+      request: FastifyRequest<{ Querystring: { pnrHmac: string } }>,
+      reply: FastifyReply,
+    ) {
+      const matches = await service.lookupByPnrHmac(request.query.pnrHmac);
+      return reply.send({ matches });
+    },
   };
 }

@@ -53,4 +53,17 @@ export function registerCustomerRoutes(
     },
     c.getInternal,
   );
+
+  // Fas 12: separat scope, medvetet skild från billing:customer:read — att
+  // söka över ALLA tenants på ett hashat personnummer är en väsentligt mer
+  // känslig förmåga än att läsa en redan känd kund, och ska kunna
+  // återkallas för sig.
+  app.get<{ Querystring: { pnrHmac: string } }>(
+    "/internal/customers/by-pnr-hmac",
+    {
+      preHandler: deps.requireService("billing:customer:lookup"),
+      schema: { querystring: schema.byPnrHmacQuery },
+    },
+    c.byPnrHmac,
+  );
 }

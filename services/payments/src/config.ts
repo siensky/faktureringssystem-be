@@ -46,6 +46,15 @@ const optional = loadEnvWithDefaults({
   // bara i "real"-läget, se produktionsspärren nedan.
   STRIPE_PROVIDER: "mock",
   STRIPE_SECRET_KEY: "",
+  // Fas 13: nginx' publika origin (samma en webbläsaren redan pratar med,
+  // apps/portal/src/api/client.ts:s VITE_API_BASE_URL-default) — bara
+  // använt av MockStripeProvider för att bygga en checkout-URL webbläsaren
+  // faktiskt kan nå. "https://checkout.stripe.test/..." (den gamla,
+  // rent deterministiska platshållar-URL:en) gick aldrig att besöka i en
+  // riktig webbläsare, bara att räkna ut för ett simulerat webhook-event i
+  // e2e — ett manuellt rökprov i portalen körde rakt in i "site can't be
+  // reached".
+  GATEWAY_BASE_URL: "http://localhost:8080",
 });
 
 function trimTrailingSlash(url: string): string {
@@ -71,6 +80,7 @@ export const config = {
   portalBaseUrl: trimTrailingSlash(required.PORTAL_BASE_URL),
   stripeProvider: optional.STRIPE_PROVIDER,
   stripeSecretKey: optional.STRIPE_SECRET_KEY,
+  gatewayBaseUrl: trimTrailingSlash(optional.GATEWAY_BASE_URL),
 } as const;
 
 // Samma disciplin som BANKID_PROVIDER (services/auth/src/config.ts):

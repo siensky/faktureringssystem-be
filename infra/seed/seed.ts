@@ -123,13 +123,25 @@ async function main(): Promise<void> {
     {
       clientId: required("AUTH_CLIENT_ID"),
       clientSecret: required("AUTH_CLIENT_SECRET"),
-      // Minsta möjliga scope (architecture.md #18): POST
-      // /auth/customer-invites validerar customerId mot billing INNAN en
-      // users-rad skrivs (fas 9).
-      scopes: (process.env.AUTH_CLIENT_SCOPES ?? "billing:customer:read")
+      // billing:customer:read (fas 9): validerar customerId INNAN en
+      // users-rad skrivs vid kundinbjudan.
+      // billing:customer:lookup (fas 12): tenant-övergripande uppslag på
+      // pnr_hmac vid BankID-inloggning — egen scope, mer känslig förmåga
+      // än att läsa en redan känd kund.
+      // billing:portal:read (fas 12): en accountSummary-läsning per
+      // länkat företag för kundens företagsöversikt.
+      // OBS: samma default-sträng står ÄVEN i services/auth/src/config.ts
+      // (AUTH_CLIENT_SCOPES) — de två kan inte importera varandra (skilda
+      // paket, seed har inget beroende på @faktura/shared). Uppdaterar du
+      // en, uppdatera den andra.
+      scopes: (
+        process.env.AUTH_CLIENT_SCOPES ??
+        "billing:customer:read billing:customer:lookup billing:portal:read"
+      )
         .split(/\s+/)
         .filter(Boolean),
-      description: "auth-tjänsten: validerar customerId mot billing för kundinbjudan (fas 9)",
+      description:
+        "auth-tjänsten: kundinbjudan (fas 9), BankID-igenkänning och företagsöversikt (fas 12)",
     },
   ];
 

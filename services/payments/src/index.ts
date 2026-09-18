@@ -28,6 +28,7 @@ import { registerImportRoutes } from "./import/routes";
 import { createImportService } from "./import/service";
 import { createMatchingService } from "./matching/service";
 import { registerOpsRoutes } from "./ops/routes";
+import { registerMockCheckoutRoutes } from "./stripe/mock-checkout";
 import { MockStripeProvider, RealStripeProvider } from "./stripe/provider";
 import { registerStripeRoutes } from "./stripe/routes";
 import { createStripeService } from "./stripe/service";
@@ -81,7 +82,7 @@ startService({
     const stripeProvider =
       config.stripeProvider === "real"
         ? new RealStripeProvider(config.stripeSecretKey)
-        : new MockStripeProvider();
+        : new MockStripeProvider(config.gatewayBaseUrl);
     const stripeService = createStripeService({
       sql,
       provider: stripeProvider,
@@ -93,6 +94,12 @@ startService({
       webhookSecret: config.stripeWebhookSecret,
       requireService,
     });
+    // Bara i mock-läge — se mock-checkout.ts:s filhuvud. Kan aldrig nås i
+    // produktion (config.ts kraschar redan vid uppstart om mocken vore
+    // aktiv där).
+    if (config.stripeProvider === "mock") {
+      registerMockCheckoutRoutes(app, stripeService);
+    }
 
     const publisher = startOutboxPublisher({
       sql,

@@ -33,7 +33,7 @@ types/        → TypeScript-typer för modulen
 11. **Alla fel är subklasser av `BaseError`** från `packages/shared`. Kasta aldrig en sträng, aldrig en naken `Error`.
 12. **Välj rätt felklass** — `NotFound`, `BadRequest`, `Conflict`, `Forbidden`, `Unauthorized`. Statuskoden kommer därifrån, sätt den aldrig för hand.
 13. **Felmeddelanden till klienten avslöjar inget internt** — ingen SQL, inga stack traces, inga tabellnamn. `full_error` är för loggen, `toPublicError()` för svaret.
-14. **Ett `404` över tenant- eller kundgränsen, aldrig `403`.** Att svara "förbjudet" bekräftar att resursen finns hos någon annan. `403` används bara när anroparen är rätt identifierad men saknar behörighet — till exempel ett tjänste-token med fel scope.
+14. **Ett `404` över tenant- eller kundgränsen, aldrig `403`.** Att svara "förbjudet" bekräftar att resursen finns hos någon annan. `403` används bara när anroparen är rätt identifierad men saknar behörighet — till exempel ett tjänste-token med fel scope. **Ett medvetet undantag (fas 12):** `POST /auth/companies/switch` svarar `403` på ett `tenantId` som inte finns i `user_company_links`, inte `404` — den anropande identiteten är redan fullt autentiserad (ett giltigt access-token), det är just behörigheten till DET företaget som saknas, samma situation som ett tjänste-token med fel scope. Läcker i teorin att kontot en gång varit kund hos den tenanten om länken senare tagits bort (samma meddelande för "aldrig länkad" och "länk borttagen") — lågkänsligt, det är personens egen historik, men värt att känna till.
 15. **Svälj aldrig ett fel.** Ingen tom `catch`. Kan du inte hantera felet, låt det bubbla.
 
 ## TypeScript

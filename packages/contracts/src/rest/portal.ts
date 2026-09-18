@@ -2,7 +2,7 @@
 // services/auth/src/auth — customer-invites). Belopp är kronor (number),
 // samma mapper-konvention som rest/invoices.ts (database.md #8).
 
-import type { DeliveryStatus, InvoiceStatus, InvoiceType } from "./invoices";
+import type { DeliveryStatus, InvoiceStatus, InvoiceType, RecurrenceInterval } from "./invoices";
 
 /** GET /portal/invoices — samma fält som admins InvoiceSummaryDto minus
  *  customerId/customerName (kunden vet redan vem den är). */
@@ -53,6 +53,17 @@ export interface PortalInvoicePdfDto {
 export interface PortalAccountSummaryDto {
   outstanding: number;
   outstandingInvoiceCount: number;
+}
+
+/** GET /portal/invoice-templates (fas 13) — kundens egna aktiva
+ *  återkommande fakturor, skrivskyddat (portalen skapar/ändrar aldrig en
+ *  mall, bara backoffice). */
+export interface PortalInvoiceTemplateDto {
+  id: number;
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  currency: string;
+  totalInclVat: number;
 }
 
 /** POST /portal/invoices/:id/pay (fas 10) — url till Stripe Checkout,

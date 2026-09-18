@@ -5,6 +5,8 @@
 import type { CurrentUserDto } from "@faktura/contracts";
 import { type ReactNode, createContext, useContext, useEffect, useRef, useState } from "react";
 import * as authApi from "../api/auth";
+import type { TokenPairResponse } from "../api/auth";
+import * as bankidApi from "../api/bankid";
 import {
   clearTokens,
   getRefreshToken,
@@ -19,6 +21,10 @@ interface AuthState {
   user: CurrentUserDto | null;
   status: Status;
   login: (email: string, password: string) => Promise<void>;
+  /** Fas 12: BankID-inloggning har redan ett tokenpar från collect() — bara att sätta det. */
+  loginWithBankId: (tokens: TokenPairResponse) => Promise<void>;
+  /** Fas 12: byt aktivt företag för en BankID-kundidentitet. */
+  switchCompany: (tenantId: number) => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -60,12 +66,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
   }, []);
 
-  async function login(email: string, password: string): Promise<void> {
-    const pair = await authApi.login(email, password);
+  // Delad av login, BankID-inlogg och byt-företag — alla tre slutar med
+  // "sätt det här tokenparet, hämta den nya /auth/me-vyn".
+  async function applyTokens(pair: TokenPairResponse): Promise<void> {
     setAccessToken(pair.accessToken);
     setRefreshToken(pair.refreshToken);
     setUser(await authApi.getCurrentUser());
     setStatus("authenticated");
+  }
+
+  async function login(email: string, password: string): Promise<void> {
+    await applyTokens(await authApi.login(email, password));
+  }
+
+  async function loginWithBankId(tokens: TokenPairResponse): Promise<void> {
+    await applyTokens(tokens);
+  }
+
+  async function switchCompany(tenantId: number): Promise<void> {
+    await applyTokens(await bankidApi.switchCompany(tenantId));
   }
 
   async function logout(): Promise<void> {
@@ -83,7 +102,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }
 
   return (
-    <AuthContext.Provider value={{ user, status, login, logout }}>{children}</AuthContext.Provider>
+    <AuthContext.Provider value={{ user, status, login, loginWithBankId, switchCompany, logout }}>
+      {children}
+    </AuthContext.Provider>
   );
 }
 

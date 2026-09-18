@@ -93,6 +93,22 @@ export interface TemplateData {
   lines: LineInputDto[];
 }
 
+export interface CreateInvoiceTemplateInput {
+  customerId: number;
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  currency?: string;
+  lines: LineInputDto[];
+}
+
+export interface UpdateInvoiceTemplateInput {
+  interval?: RecurrenceInterval;
+  nextGenerationDate?: string;
+  currency?: string;
+  lines?: LineInputDto[];
+  isActive?: boolean;
+}
+
 export interface InvoiceTemplateRow {
   id: number;
   tenant_id: number;

@@ -6,6 +6,7 @@ import { TenantScopedRepository } from "@faktura/shared";
 import type { JsonObject } from "@faktura/shared";
 import type { Sql, TransactionSql } from "postgres";
 import type { CustomerRow } from "../customers/types";
+import type { RecurrenceInterval } from "../domain/dates";
 import type {
   DeliveryStatus,
   InvoiceItemRow,
@@ -19,6 +20,30 @@ type Db = Sql | TransactionSql;
 
 export interface InvoiceListRow extends InvoiceRow {
   customer_name: string;
+}
+
+export interface InvoiceTemplateListRow extends InvoiceTemplateRow {
+  customer_name: string;
+}
+
+export interface InsertTemplateData {
+  customerId: number;
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  billingDay: number;
+  // JsonObject, inte TemplateData: en namngiven interface saknar
+  // indexsignatur, som postgres.js' `.json()`-helper kräver (samma knep
+  // som buildSnapshotPayload/insertSnapshot ovan — typa gränsen mot .json()
+  // löst, typa läsningen tillbaka (InvoiceTemplateRow.template_data) strikt).
+  templateData: JsonObject;
+}
+
+export interface UpdateTemplateData {
+  interval: RecurrenceInterval;
+  nextGenerationDate: string;
+  billingDay: number;
+  templateData: JsonObject;
+  isActive: boolean;
 }
 
 export interface InsertInvoiceData {
@@ -365,5 +390,69 @@ export class InvoiceRepository extends TenantScopedRepository {
       UPDATE invoice_templates SET next_generation_date = ${nextDate}, updated_at = now()
       WHERE id = ${id} AND tenant_id = ${this.tenantId}
     `;
+  }
+
+  // --- Fas 13: admin-CRUD på mallar (ovanstående metoder är bara den
+  // redan existerande generatorns läsningar/skrivningar — ingen av dem
+  // skapar/ändrar/tar bort en mall). Samma ::text-motivering som
+  // findDueTemplates/lockTemplate ovan gäller genomgående här.
+
+  async insertTemplate(tx: TransactionSql, data: InsertTemplateData): Promise<InvoiceTemplateRow> {
+    const [row] = await tx<InvoiceTemplateRow[]>`
+      INSERT INTO invoice_templates (
+        tenant_id, customer_id, interval, next_generation_date, billing_day, template_data
+      ) VALUES (
+        ${this.tenantId}, ${data.customerId}, ${data.interval}, ${data.nextGenerationDate},
+        ${data.billingDay}, ${tx.json(data.templateData)}
+      )
+      RETURNING id, tenant_id, customer_id, interval, next_generation_date::text AS next_generation_date,
+                billing_day, is_active, template_data, created_at, updated_at
+    `;
+    if (!row) throw new Error("INSERT invoice_templates returnerade ingen rad");
+    return row;
+  }
+
+  async listTemplates(db: Db = this.sql): Promise<InvoiceTemplateListRow[]> {
+    return db<InvoiceTemplateListRow[]>`
+      SELECT t.id, t.tenant_id, t.customer_id, t.interval,
+             t.next_generation_date::text AS next_generation_date,
+             t.billing_day, t.is_active, t.template_data, t.created_at, t.updated_at,
+             c.name AS customer_name
+      FROM invoice_templates t JOIN customers c ON c.id = t.customer_id
+      WHERE t.tenant_id = ${this.tenantId}
+      ORDER BY t.created_at DESC, t.id DESC
+    `;
+  }
+
+  async findTemplateById(
+    id: number,
+    db: Db = this.sql,
+  ): Promise<InvoiceTemplateListRow | undefined> {
+    const [row] = await db<InvoiceTemplateListRow[]>`
+      SELECT t.id, t.tenant_id, t.customer_id, t.interval,
+             t.next_generation_date::text AS next_generation_date,
+             t.billing_day, t.is_active, t.template_data, t.created_at, t.updated_at,
+             c.name AS customer_name
+      FROM invoice_templates t JOIN customers c ON c.id = t.customer_id
+      WHERE t.id = ${id} AND t.tenant_id = ${this.tenantId} LIMIT 1
+    `;
+    return row;
+  }
+
+  async updateTemplate(tx: TransactionSql, id: number, fields: UpdateTemplateData): Promise<void> {
+    await tx`
+      UPDATE invoice_templates SET
+        interval = ${fields.interval},
+        next_generation_date = ${fields.nextGenerationDate},
+        billing_day = ${fields.billingDay},
+        template_data = ${tx.json(fields.templateData)},
+        is_active = ${fields.isActive},
+        updated_at = now()
+      WHERE id = ${id} AND tenant_id = ${this.tenantId}
+    `;
+  }
+
+  async deleteTemplate(tx: TransactionSql, id: number): Promise<void> {
+    await tx`DELETE FROM invoice_templates WHERE id = ${id} AND tenant_id = ${this.tenantId}`;
   }
 }

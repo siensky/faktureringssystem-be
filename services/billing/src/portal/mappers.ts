@@ -5,8 +5,15 @@ import type {
   PortalInvoiceDetailDto,
   PortalInvoiceLineDto,
   PortalInvoiceSummaryDto,
+  PortalInvoiceTemplateDto,
 } from "@faktura/contracts";
-import type { AccountSummaryRow, PortalInvoiceItemRow, PortalInvoiceRow } from "./types";
+import { computeLine, sumTotals } from "../domain/vat";
+import type {
+  AccountSummaryRow,
+  PortalInvoiceItemRow,
+  PortalInvoiceRow,
+  PortalInvoiceTemplateRow,
+} from "./types";
 
 const kr = (ore: string | number): number => Number(ore) / 100;
 
@@ -60,5 +67,18 @@ export function toAccountSummary(row: AccountSummaryRow) {
   return {
     outstanding: kr(row.outstanding_ore),
     outstandingInvoiceCount: row.outstanding_count,
+  };
+}
+
+/** Samma momsberäkning som en riktig faktura, bara för visning — mallen
+ *  bär inga egna öresfält, bara de råa radangivelserna. */
+export function toPortalTemplate(row: PortalInvoiceTemplateRow): PortalInvoiceTemplateDto {
+  const amounts = row.template_data.lines.map((line) => computeLine(line));
+  return {
+    id: row.id,
+    interval: row.interval,
+    nextGenerationDate: row.next_generation_date,
+    currency: row.template_data.currency ?? "SEK",
+    totalInclVat: kr(sumTotals(amounts).totalInclVatOre),
   };
 }
