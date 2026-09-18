@@ -53,9 +53,10 @@ const optional = loadEnvWithDefaults({
   BANKID_CERT_PATH: "",
   BANKID_CERT_PASSPHRASE: "",
   BANKID_CA_PATH: "",
-  // Minsta möjliga scope (architecture.md #18): auth anropar bara
-  // GET /internal/customers/:id.
-  AUTH_CLIENT_SCOPES: "billing:customer:read",
+  // billing:customer:read (fas 9), billing:customer:lookup + billing:portal:read
+  // (fas 12, BankID-igenkänning tenant-övergripande) — minsta möjliga
+  // scope per (architecture.md #18).
+  AUTH_CLIENT_SCOPES: "billing:customer:read billing:customer:lookup billing:portal:read",
 });
 
 function trimTrailingSlash(url: string): string {

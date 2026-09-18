@@ -54,7 +54,7 @@ draft ──► sent ──► paid
 
 ## Inloggning
 
-22. **En lyckad BankID-signering skapar aldrig ett konto.** Finns ingen matchande `pnr_hash` blir det `401`. Annars kan vem som helst med BankID skaffa sig åtkomst till vilket företag som helst.
+22. **En lyckad BankID-signering skapar aldrig en `customers`-rad** — en affärsrelation skapas bara av en admin. Den FÅR skapa en `users`-inloggningsidentitet, en gång, vid första igenkänningen — om personnumret matchar minst en privat kundrad hos NÅGON tenant (fas 12). Ingen matchning alls hos någon tenant ger `401`, ingen rad skapas. Annars kan vem som helst med BankID skaffa sig åtkomst till vilket företag som helst. **En sådan identitet kan vara länkad till flera företag samtidigt** (`user_company_links`) — samma person kan vara privatkund hos flera tenants. Varje utfärdad session gäller ändå exakt ett företag åt gången, precis som en vanlig kundinloggning; att byta aktivt företag kräver ett eget anrop (`POST /auth/companies/switch`) som verifieras mot länktabellen server-side, aldrig ett klient-hävdat tenant-id.
 
 ## Utskick
 

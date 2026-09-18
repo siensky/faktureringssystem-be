@@ -13,14 +13,17 @@ export function toTokenPairResponse(pair: TokenPair) {
   };
 }
 
-export function toCurrentUserView(row: {
-  id: number;
-  tenant_id: number;
-  role: UserRole;
-  email: string | null;
-  customer_id: number | null;
-  tenant_name: string;
-}): CurrentUserDto {
+export function toCurrentUserView(
+  row: {
+    id: number;
+    tenant_id: number;
+    role: UserRole;
+    email: string | null;
+    customer_id: number | null;
+    tenant_name: string;
+  },
+  companies?: { tenant_id: number; tenant_name: string; customer_id: number }[],
+): CurrentUserDto {
   return {
     userId: row.id,
     tenantId: row.tenant_id,
@@ -28,6 +31,13 @@ export function toCurrentUserView(row: {
     email: row.email,
     role: row.role,
     customerId: row.customer_id,
+    ...(companies && {
+      companies: companies.map((c) => ({
+        tenantId: c.tenant_id,
+        tenantName: c.tenant_name,
+        customerId: c.customer_id,
+      })),
+    }),
   };
 }
 

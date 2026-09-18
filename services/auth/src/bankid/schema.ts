@@ -22,3 +22,13 @@ export const collectBody = {
   required: ["orderRef"],
   properties: { orderRef: { type: "string", minLength: 8, maxLength: 100 } },
 } as const;
+
+// Fas 12: byt aktivt företag för en redan inloggad BankID-kundidentitet.
+// tenantId verifieras alltid server-side mot user_company_links — det här
+// schemat kollar bara formen.
+export const switchCompanyBody = {
+  type: "object",
+  additionalProperties: false,
+  required: ["tenantId"],
+  properties: { tenantId: { type: "integer", minimum: 1 } },
+} as const;

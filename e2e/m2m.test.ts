@@ -234,40 +234,186 @@ describe.skipIf(!RUN)("fas 2 e2e — M2M + BankID", () => {
       ).toBe("failed");
     });
 
-    test("känt personnummer -> tokens", async () => {
-      const [{ id: tenantId }] = await sql<{ id: number }[]>`
-        INSERT INTO tenants (name, org_number) VALUES ('BankID Test', ${`55${Math.floor(1e8 + Math.random() * 8e8)}`})
+    // Fas 12: BankID skapar inte längre en users-rad direkt (den gamla
+    // fixturen ovan gjorde det med rå SQL i den enda-tenant-formen) —
+    // collect() gör det nu SJÄLV, genom att slå upp customers.pnr_hmac hos
+    // billing. Fixturen sätter därför bara in en PRIVAT kundrad (den enda
+    // formen som räknas, planens Scope-beslut) och låter collect() göra
+    // resten — vilket också är ett strikt bättre test: det övar den
+    // riktiga mekanismen, inte en handskriven ersättning för en som inte
+    // fanns.
+    async function insertPrivateCustomer(
+      tenantId: number,
+      pnrHash: string,
+      name: string,
+    ): Promise<number> {
+      const [row] = await sql<{ id: number }[]>`
+        INSERT INTO customers (tenant_id, customer_type, name, email, pnr_encrypted, pnr_hmac)
+        VALUES (${tenantId}, 'private', ${name}, ${`${uniq()}@ex.test`}, 'e2e-placeholder-ciphertext', ${pnrHash})
         RETURNING id
       `;
-      createdTenantIds.push(tenantId!);
-      // Fas 9: role='customer' kräver users.customer_id (users_customer_shape,
-      // migrations/0009_portal.js) — en portal-inloggning pekar alltid på en
-      // billing-kundrad. Minimal rad direkt via SQL, samma mönster som
-      // tenants-inserten ovan (kaskaderar bort med tenanten).
-      const [{ id: customerId }] = await sql<{ id: number }[]>`
-        INSERT INTO customers (tenant_id, customer_type, name, email, org_number)
-        VALUES (${tenantId}, 'company', 'BankID Test-kund', 'bankid-test@ex.test', '5560000001')
+      return row!.id;
+    }
+
+    async function insertTenant(name: string): Promise<number> {
+      const [row] = await sql<{ id: number }[]>`
+        INSERT INTO tenants (name, org_number) VALUES (${name}, ${`55${Math.floor(1e8 + Math.random() * 8e8)}`})
         RETURNING id
       `;
+      createdTenantIds.push(row!.id);
+      return row!.id;
+    }
+
+    test("känt personnummer (privatkund) -> BankID skapar kundidentitet + token", async () => {
+      const tenantId = await insertTenant("BankID Test");
       const pnr = `1995${Math.floor(1e7 + Math.random() * 8e7)}`;
-      await sql`
-        INSERT INTO users (tenant_id, role, auth_method, pnr_hash, customer_id)
-        VALUES (${tenantId}, 'customer', 'bankid', ${hmacField(pnr, PNR_HMAC_KEY)}, ${customerId})
-      `;
+      const customerId = await insertPrivateCustomer(
+        tenantId,
+        hmacField(pnr, PNR_HMAC_KEY),
+        "BankID Testperson",
+      );
 
       const init = await post("/auth/bankid/init", { personalNumber: pnr });
       const { orderRef } = (await init.json()) as { orderRef: string };
       const collect = await post("/auth/bankid/collect", { orderRef });
       expect(collect.status).toBe(200);
-      const body = (await collect.json()) as { status: string; accessToken: string };
+      const body = (await collect.json()) as {
+        status: string;
+        accessToken: string;
+        companies: { tenantId: number; tenantName: string; customerId: number }[];
+      };
       expect(body.status).toBe("complete");
       expect(decodeJwt(body.accessToken).role).toBe("customer");
       expect(decodeJwt(body.accessToken).tenantId).toBe(tenantId);
       // customerId måste vara med — annars avvisar verifyAccessToken tokenet
       // på nästa anrop (packages/shared/src/auth/tokens.ts).
       expect(decodeJwt(body.accessToken).customerId).toBe(customerId);
+      expect(body.companies).toEqual([{ tenantId, tenantName: "BankID Test", customerId }]);
+
+      // Regressionstest: GET /auth/me fungerar för en BankID-kundidentitet
+      // (users.tenant_id är NULL på dess egen rad — se auth/repository.ts
+      // findBankIdCustomerContext).
       const me = await get("/auth/me", { authorization: `Bearer ${body.accessToken}` });
       expect(me.status).toBe(200);
+      const meBody = (await me.json()) as {
+        companies?: { tenantId: number; tenantName: string; customerId: number }[];
+      };
+      expect(meBody.companies).toEqual([{ tenantId, tenantName: "BankID Test", customerId }]);
+    });
+
+    test("samma personnummer hos två tenants -> båda listas, byte av företag ger isolerad session", async () => {
+      const tenantA = await insertTenant("BankID Test A");
+      const tenantB = await insertTenant("BankID Test B");
+      const pnr = `1996${Math.floor(1e7 + Math.random() * 8e7)}`;
+      const pnrHash = hmacField(pnr, PNR_HMAC_KEY);
+      const customerIdA = await insertPrivateCustomer(tenantA, pnrHash, "Person X hos A");
+      const customerIdB = await insertPrivateCustomer(tenantB, pnrHash, "Person X hos B");
+
+      const init = await post("/auth/bankid/init", { personalNumber: pnr });
+      const { orderRef } = (await init.json()) as { orderRef: string };
+      const collect = await post("/auth/bankid/collect", { orderRef });
+      expect(collect.status).toBe(200);
+      const body = (await collect.json()) as {
+        accessToken: string;
+        companies: { tenantId: number; customerId: number }[];
+      };
+      expect(body.companies.map((c) => c.tenantId).sort()).toEqual([tenantA, tenantB].sort());
+
+      // GET /auth/companies/overview: en helt ny S2S-kedja (auth ->
+      // billings /internal/portal/account-summary, en gång per länkat
+      // företag). Båda tenants ska synas, med rätt customerId var för sig
+      // — noll fakturor att vänta (inga skapade i det här testet), men
+      // det bevisar att uppslaget är korrekt tenant-scopat, inte att
+      // beloppen stämmer (det täcks redan av portalens egna tester).
+      const overview = await get("/auth/companies/overview", {
+        authorization: `Bearer ${body.accessToken}`,
+      });
+      expect(overview.status).toBe(200);
+      const overviewBody = (await overview.json()) as {
+        companies: { tenantId: number; customerId: number; outstandingInvoiceCount: number }[];
+      };
+      const byTenant = new Map(overviewBody.companies.map((c) => [c.tenantId, c]));
+      expect(byTenant.get(tenantA)).toMatchObject({
+        customerId: customerIdA,
+        outstandingInvoiceCount: 0,
+      });
+      expect(byTenant.get(tenantB)).toMatchObject({
+        customerId: customerIdB,
+        outstandingInvoiceCount: 0,
+      });
+
+      // Byt till tenant B — ny session, verifierad mot user_company_links,
+      // isolerad från tenant A:s kundId.
+      const switched = await post(
+        "/auth/companies/switch",
+        { tenantId: tenantB },
+        { authorization: `Bearer ${body.accessToken}` },
+      );
+      expect(switched.status).toBe(200);
+      const switchedBody = (await switched.json()) as { accessToken: string };
+      expect(decodeJwt(switchedBody.accessToken).tenantId).toBe(tenantB);
+      expect(decodeJwt(switchedBody.accessToken).customerId).toBe(customerIdB);
+
+      // Ett tenantId som INTE finns i user_company_links -> 403, aldrig
+      // klientens önskemål (architecture.md #13/#17).
+      const unlinked = await post(
+        "/auth/companies/switch",
+        { tenantId: 2147483000 },
+        { authorization: `Bearer ${body.accessToken}` },
+      );
+      expect(unlinked.status).toBe(403);
+    });
+
+    test("kunden tas bort hos en tenant -> länken rensas bort vid nästa inloggning", async () => {
+      const tenantA = await insertTenant("BankID Test C");
+      const tenantB = await insertTenant("BankID Test D");
+      const pnr = `1997${Math.floor(1e7 + Math.random() * 8e7)}`;
+      const pnrHash = hmacField(pnr, PNR_HMAC_KEY);
+      const customerIdA = await insertPrivateCustomer(tenantA, pnrHash, "Person Y hos A");
+      await insertPrivateCustomer(tenantB, pnrHash, "Person Y hos B");
+
+      // Första inloggningen: länkad till båda.
+      const firstInit = await post("/auth/bankid/init", { personalNumber: pnr });
+      const { orderRef: firstOrderRef } = (await firstInit.json()) as { orderRef: string };
+      const first = await post("/auth/bankid/collect", { orderRef: firstOrderRef });
+      expect(first.status).toBe(200);
+      const firstBody = (await first.json()) as {
+        accessToken: string;
+        companies: { tenantId: number }[];
+      };
+      expect(firstBody.companies.map((c) => c.tenantId).sort()).toEqual([tenantA, tenantB].sort());
+
+      // Kunden hos A tas bort helt (ingen faktura -> tillåtet, domain.md #21)
+      // — precis "personen är inte längre kund där".
+      await sql`DELETE FROM customers WHERE id = ${customerIdA}`;
+
+      // Andra inloggningen: billing-uppslaget ger nu bara B. syncCompanyLinks
+      // ska då RENSA BORT länken till A, inte bara låta den ligga kvar.
+      const secondInit = await post("/auth/bankid/init", { personalNumber: pnr });
+      const { orderRef: secondOrderRef } = (await secondInit.json()) as { orderRef: string };
+      const second = await post("/auth/bankid/collect", { orderRef: secondOrderRef });
+      expect(second.status).toBe(200);
+      const secondBody = (await second.json()) as {
+        accessToken: string;
+        companies: { tenantId: number }[];
+      };
+      expect(secondBody.companies.map((c) => c.tenantId)).toEqual([tenantB]);
+
+      // Direkt mot databasen: raden i user_company_links för tenant A ska
+      // vara helt borta, inte bara filtrerad bort i svaret.
+      const userId = decodeJwt(secondBody.accessToken).sub as string;
+      const remainingLinks = await sql<{ tenant_id: number }[]>`
+        SELECT tenant_id FROM user_company_links WHERE user_id = ${Number(userId)}
+      `;
+      expect(remainingLinks.map((l) => l.tenant_id)).toEqual([tenantB]);
+
+      // Byte till den borttagna tenanten A -> 403, precis som ett olänkat företag.
+      const switchToRemoved = await post(
+        "/auth/companies/switch",
+        { tenantId: tenantA },
+        { authorization: `Bearer ${secondBody.accessToken}` },
+      );
+      expect(switchToRemoved.status).toBe(403);
     });
   });
 });

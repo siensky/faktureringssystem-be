@@ -4,6 +4,13 @@
 
 export type UserRole = "admin" | "customer";
 
+/** Fas 12: ett av de företag en BankID-kundidentitet är länkad till (user_company_links). */
+export interface CompanyLinkDto {
+  tenantId: number;
+  tenantName: string;
+  customerId: number;
+}
+
 export interface CurrentUserDto {
   userId: number;
   tenantId: number;
@@ -12,4 +19,6 @@ export interface CurrentUserDto {
   role: UserRole;
   /** Fas 9: bara satt för role: "customer" — portalens egen kund-id. */
   customerId: number | null;
+  /** Fas 12: bara satt för en BankID-kundidentitet med minst ett länkat företag. */
+  companies?: CompanyLinkDto[];
 }

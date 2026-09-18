@@ -82,3 +82,32 @@ export class CustomerRepository extends TenantScopedRepository {
     return res.count;
   }
 }
+
+export interface CustomerCompanyMatch {
+  tenantId: number;
+  customerId: number;
+}
+
+/**
+ * pnr_hmac -> varje (tenant, kund)-par som just nu har den här personen
+ * som privatkund. Fristående funktion, INTE en metod på CustomerRepository
+ * — klassens tenantId-getter kastar innan tenanten är känd (fail closed,
+ * architecture.md #21), men det är precis vad det här uppslaget ska
+ * avgöra. Samma avvikelse-motivering som findTenantIdByBankgiro i
+ * company-settings/repository.ts.
+ *
+ * Till skillnad från bankgiro (globalt unikt) kan SAMMA pnr_hmac träffa
+ * FLERA tenants: customers_pnr_hmac_key är unikt per (tenant_id,
+ * pnr_hmac), inte globalt — en privatperson kan vara kund hos flera
+ * företag (fas 12, planens Datamodell-avsnitt).
+ */
+export async function findCustomersByPnrHmac(
+  sql: Sql,
+  pnrHmac: string,
+): Promise<CustomerCompanyMatch[]> {
+  const rows = await sql<{ tenant_id: number; customer_id: number }[]>`
+    SELECT tenant_id, id AS customer_id FROM customers
+    WHERE pnr_hmac = ${pnrHmac} AND customer_type = 'private'
+  `;
+  return rows.map((r) => ({ tenantId: r.tenant_id, customerId: r.customer_id }));
+}

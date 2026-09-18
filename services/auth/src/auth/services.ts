@@ -16,6 +16,7 @@ import type { Logger, RequestContext } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
 import { writeAuditLog } from "../audit";
+import { createBankIdRepository } from "../bankid/repository";
 import { findCustomer } from "../billing-client";
 import type { config as Config } from "../config";
 import { SERVICE_NAME } from "../config";
@@ -46,6 +47,7 @@ const norm = (email: string) => email.trim().toLowerCase();
 export function createAuthService(deps: Deps) {
   const { sql, redis, config, logger } = deps;
   const repo = createAuthRepository(sql);
+  const bankIdRepo = createBankIdRepository(sql);
   const sessionIssuer = createSessionIssuer({ sql, config });
 
   // Argon2-hash att verifiera mot när användaren inte finns, så svarstiden
@@ -183,9 +185,17 @@ export function createAuthService(deps: Deps) {
 
     /** Fas 8: GET /auth/me. userId/tenantId kommer redan verifierade ur access-token. */
     async me(ctx: RequestContext) {
-      const row = await repo.findUserWithTenantById(ctx.userId, ctx.tenantId);
+      // Fas 12: en BankID-kundidentitet har users.tenant_id = NULL, så
+      // huvudvägen (WHERE u.tenant_id = tenantId) matchar aldrig en sådan
+      // rad — se findBankIdCustomerContext.
+      const row =
+        (await repo.findUserWithTenantById(ctx.userId, ctx.tenantId)) ??
+        (await repo.findBankIdCustomerContext(ctx.userId, ctx.tenantId));
       if (!row) throw new NotFound("Användaren finns inte");
-      return toCurrentUserView(row);
+
+      const companies =
+        row.role === "customer" ? await bankIdRepo.listCompanyLinks(ctx.userId) : undefined;
+      return toCurrentUserView(row, companies?.length ? companies : undefined);
     },
 
     async refresh(refreshToken: string) {

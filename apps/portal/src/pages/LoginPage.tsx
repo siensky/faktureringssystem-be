@@ -67,6 +67,11 @@ export function LoginPage() {
             Skapa lösenord
           </Link>
         </p>
+        <p className="mt-2 text-center text-sm text-slate-500">
+          <Link to="/login/bankid" className="underline">
+            Logga in med BankID
+          </Link>
+        </p>
       </form>
     </div>
   );

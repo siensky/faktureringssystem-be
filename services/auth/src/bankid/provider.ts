@@ -67,9 +67,17 @@ const ORDER_TTL_SECONDS = 300;
  *   "000000000000" (12 nollor)  -> alltid pending
  *   "999999999999" (12 nior)     -> failed
  *   annat                           -> complete med det personnumret
+ *
+ * Anges inget personnummer alls (fas 12: QR-/samma-enhet-flödet, det enda
+ * apps/portal faktiskt använder) simuleras QR_FLOW_PERSONAL_NUMBER i
+ * stället — precis som riktiga BankID alltid returnerar den signerande
+ * personens riktiga personnummer i completionData oavsett om RP:n angav
+ * ett i förväg. Utan den här substitutionen skulle collect() krascha på
+ * normalizePnr("") för varje inloggning som går via QR-sidan i portalen.
  */
 const PENDING_SENTINEL = "0".repeat(12);
 const FAILED_SENTINEL = "9".repeat(12);
+const QR_FLOW_PERSONAL_NUMBER = "199001011234";
 export class MockBankIdProvider implements BankIdProvider {
   constructor(private readonly redis: Redis) {}
 
@@ -77,7 +85,7 @@ export class MockBankIdProvider implements BankIdProvider {
     const orderRef = randomUUID();
     await this.redis.set(
       KEY(orderRef),
-      JSON.stringify({ personalNumber: input.personalNumber ?? "" }),
+      JSON.stringify({ personalNumber: input.personalNumber ?? QR_FLOW_PERSONAL_NUMBER }),
       "EX",
       ORDER_TTL_SECONDS,
     );

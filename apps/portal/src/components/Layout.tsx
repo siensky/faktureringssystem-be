@@ -3,6 +3,7 @@ import { useAuth } from "../auth/AuthContext";
 
 export function Layout() {
   const { user, logout } = useAuth();
+  const hasMultipleCompanies = (user?.companies?.length ?? 0) > 1;
 
   return (
     <div className="min-h-screen bg-slate-50 text-slate-900">
@@ -12,6 +13,11 @@ export function Layout() {
             {user?.tenantName} — mina sidor
           </Link>
           <div className="flex items-center gap-4 text-sm text-slate-500">
+            {hasMultipleCompanies && (
+              <Link to="/companies" className="text-slate-500 hover:text-slate-900">
+                Byt företag
+              </Link>
+            )}
             <span>{user?.email}</span>
             <button
               type="button"

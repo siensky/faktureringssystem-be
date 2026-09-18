@@ -6,6 +6,12 @@
       "runtimeExecutable": "bun",
       "runtimeArgs": ["run", "--cwd", "apps/backoffice", "dev"],
       "port": 5173
+    },
+    {
+      "name": "portal",
+      "runtimeExecutable": "bun",
+      "runtimeArgs": ["run", "--cwd", "apps/portal", "dev"],
+      "port": 5174
     }
   ]
 }

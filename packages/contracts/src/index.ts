@@ -18,7 +18,8 @@ export type { PaymentPartialPayload } from "./generated/payment-partial";
 
 // REST-typer (fas 8, handskrivna — inget schema/codegen för dem ännu).
 // Delas mellan backend-mapparna och apps/backoffice.
-export type { UserRole, CurrentUserDto } from "./rest/auth";
+export type { UserRole, CurrentUserDto, CompanyLinkDto } from "./rest/auth";
+export type { CompanyOverviewEntry, CompanyOverviewDto } from "./rest/company-overview";
 export type {
   CustomerType,
   CustomerDto,

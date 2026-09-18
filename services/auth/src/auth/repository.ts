@@ -73,6 +73,49 @@ export function createAuthRepository(sql: Sql) {
       return row;
     },
 
+    /**
+     * Fas 12: reservväg för GET /auth/me när ovanstående inte hittar
+     * något. En BankID-kundidentitets users.tenant_id är NULL (den har
+     * ingen egen "hemma-tenant" — bara länkar, migrations/0011), så
+     * findUserWithTenantById ovan (WHERE u.tenant_id = tenantId) matchar
+     * ALDRIG en sådan rad. Joinar via user_company_links i stället: den
+     * aktuella sessionens tenantId måste finnas som en länk för just den
+     * här identiteten.
+     */
+    async findBankIdCustomerContext(
+      id: number,
+      tenantId: number,
+    ): Promise<
+      | {
+          id: number;
+          tenant_id: number;
+          role: UserRole;
+          email: string | null;
+          customer_id: number | null;
+          tenant_name: string;
+        }
+      | undefined
+    > {
+      const [row] = await sql<
+        {
+          id: number;
+          tenant_id: number;
+          role: UserRole;
+          email: string | null;
+          customer_id: number | null;
+          tenant_name: string;
+        }[]
+      >`
+        SELECT u.id, l.tenant_id, u.role, u.email, l.customer_id, t.name AS tenant_name
+        FROM users u
+        JOIN user_company_links l ON l.user_id = u.id AND l.tenant_id = ${tenantId}
+        JOIN tenants t ON t.id = l.tenant_id
+        WHERE u.id = ${id} AND u.auth_method = 'bankid'
+        LIMIT 1
+      `;
+      return row;
+    },
+
     /** Finns redan en portal-inloggning för den här kunden? (users_customer_id_unique). */
     async findUserByCustomerId(customerId: number): Promise<UserRow | undefined> {
       const [row] = await sql<UserRow[]>`

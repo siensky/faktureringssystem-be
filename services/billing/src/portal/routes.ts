@@ -9,7 +9,7 @@ type ListQuery = { limit?: number; offset?: number };
 export function registerPortalRoutes(
   app: FastifyInstance,
   service: PortalService,
-  deps: { customerChain: PreHandler[] },
+  deps: { customerChain: PreHandler[]; requireService: (scope: string) => PreHandler },
 ): void {
   const c = createPortalControllers(service);
   const u = { preHandler: deps.customerChain };
@@ -34,5 +34,16 @@ export function registerPortalRoutes(
     "/portal/invoices/:id/pay",
     { ...u, schema: { params: schema.invoiceIdParams } },
     c.pay,
+  );
+
+  // Fas 12: auth ropar denna för att bygga företagsöversikten, en gång per
+  // länkat företag (aldrig en fråga som själv korsar tenant_id).
+  app.get<{ Querystring: { customerId: number } }>(
+    "/internal/portal/account-summary",
+    {
+      preHandler: deps.requireService("billing:portal:read"),
+      schema: { querystring: schema.accountSummaryInternalQuery },
+    },
+    c.accountSummaryInternal,
   );
 }

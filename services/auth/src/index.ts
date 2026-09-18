@@ -90,7 +90,7 @@ startService({
       config,
       provider: bankIdProvider,
     });
-    registerBankIdRoutes(app, bankIdService, strictLimit);
+    registerBankIdRoutes(app, bankIdService, strictLimit, requireUser);
 
     registerInternalFixtures(app, { requireService });
 

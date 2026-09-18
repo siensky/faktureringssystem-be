@@ -1,6 +1,29 @@
 import { describe, expect, test } from "bun:test";
 import type { BankIdProvider, InitResult } from "../src/bankid/provider";
-import { createBankIdService } from "../src/bankid/services";
+
+// services.ts importerar (via billing-client.ts) den riktiga config.ts, som
+// kraschar vid import utan alla obligatoriska miljövariabler (code-style.md
+// #28). Sätts INNAN den dynamiska importen nedan, så modulen aldrig laddas
+// med en tom miljö — samma behov som config-guard.test.ts löser med en
+// subprocess, men här räcker dummyvärden eftersom vi aldrig nätverkar ut
+// (providern nedan är en fejk och config-objektet som skickas in i
+// createBankIdService är ett eget, separat fejk-objekt).
+for (const [key, value] of Object.entries({
+  DATABASE_URL: "postgres://x/y",
+  RABBITMQ_URL: "amqp://x",
+  REDIS_URL: "redis://x",
+  JWT_USER_SECRET: "u",
+  JWT_SERVICE_SECRET: "s",
+  AUTH_TOKEN_PEPPER: "p",
+  PNR_HMAC_KEY: "deadbeef".repeat(8),
+  BILLING_BASE_URL: "http://billing",
+  AUTH_BASE_URL: "http://auth",
+  AUTH_CLIENT_ID: "svc-auth",
+  AUTH_CLIENT_SECRET: "c",
+})) {
+  process.env[key] = value;
+}
+const { createBankIdService } = await import("../src/bankid/services");
 
 // Minimal Redis-fake — bara det assertInitRate (throttle.ts) använder.
 class FakeRedis {

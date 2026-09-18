@@ -6,6 +6,11 @@
 import { Forbidden, Unauthorized, hmacField, normalizePnr } from "@faktura/shared";
 import type Redis from "ioredis";
 import type { Sql } from "postgres";
+import {
+  type CustomerCompanyMatch,
+  findCustomersByPnrHmac,
+  getPortalAccountSummary,
+} from "../billing-client";
 import type { config as Config } from "../config";
 import { createSessionIssuer } from "../session";
 import { assertInitRate, recordLoginFailure } from "../throttle";
@@ -41,7 +46,20 @@ export function createBankIdService(deps: Deps) {
       return { orderRef, autoStartToken, qrStartToken, qrStartSecret, qrStartedAt };
     },
 
-    async collect(orderRef: string) {
+    /**
+     * Fas 12: BankID-kundigenkänning, tenant-övergripande. En lyckad
+     * signering skapar ALDRIG en customers-rad (bara en admin gör det) —
+     * den FÅR skapa en users-inloggningsidentitet, en gång, om
+     * personnumret redan matchar minst en privat kund hos NÅGON tenant
+     * (domain.md #22, omskriven scope). Ingen matchning alls -> 401, ingen
+     * rad skapas.
+     *
+     * Sessionen förblir enda-tenant precis som alltid — identiteten kan
+     * vara länkad till flera företag, men det utfärdade tokenet gäller
+     * exakt ett (det senast använda, eller första vid en ny identitet).
+     * Att byta företag görs via POST /auth/companies/switch.
+     */
+    async collect(orderRef: string, correlationId: string) {
       const result: CollectResult = await deps.provider.collect(orderRef);
 
       if (result.status !== "complete") {
@@ -50,19 +68,100 @@ export function createBankIdService(deps: Deps) {
 
       const pnr = normalizePnr(result.completionData!.personalNumber);
       const pnrHash = hmacField(pnr, deps.config.pnrHmacKey);
-      const user = await repo.findBankIdUserByPnrHash(pnrHash);
 
-      if (!user) {
-        // Ingen matchande användare -> avvisa. Inget konto skapas.
-        await recordLoginFailure(deps.redis, `bankid:${pnrHash}`);
-        throw new Unauthorized("Ingen användare kopplad till detta BankID");
+      const matches = await findCustomersByPnrHmac(deps.redis, pnrHash, correlationId);
+      const activeMatches: CustomerCompanyMatch[] = [];
+      for (const match of matches) {
+        if ((await repo.getTenantStatus(match.tenantId)) === "active") {
+          activeMatches.push(match);
+        }
       }
-      if ((await repo.getTenantStatus(user.tenant_id)) !== "active") {
+
+      if (activeMatches.length === 0) {
+        // Ingen matchande privatkund hos någon aktiv tenant -> avvisa.
+        // Inget konto skapas.
+        await recordLoginFailure(deps.redis, `bankid:${pnrHash}`);
+        throw new Unauthorized("Ingen kund kopplad till detta BankID");
+      }
+
+      const identity = await deps.sql.begin(async (tx) => {
+        const user = await repo.findOrCreateBankIdCustomerIdentity(tx, pnrHash);
+        await repo.syncCompanyLinks(tx, user.id, activeMatches);
+        return user;
+      });
+
+      const links = await repo.listCompanyLinks(identity.id);
+      const active = links[0];
+      if (!active) throw new Error("Inga företagslänkar trots minst en aktiv matchning");
+      await repo.touchLink(identity.id, active.tenant_id);
+
+      const tokens = await sessionIssuer.issue({
+        id: identity.id,
+        tenant_id: active.tenant_id,
+        role: "customer",
+        customer_id: active.customer_id,
+      });
+
+      return {
+        status: "complete" as const,
+        ...tokens,
+        companies: links.map((link) => ({
+          tenantId: link.tenant_id,
+          tenantName: link.tenant_name,
+          customerId: link.customer_id,
+        })),
+      };
+    },
+
+    /**
+     * Byter aktivt företag för en redan inloggad BankID-kundidentitet.
+     * Verifierar ALLTID server-side mot user_company_links — litar aldrig
+     * på klientens tenantId (architecture.md #13/#17). Meningslös för
+     * lösenordskunder: de har inga rader i user_company_links och får
+     * samma Forbidden som ett olänkat företag.
+     */
+    async switchCompany(userId: number, tenantId: number) {
+      const link = await repo.findLink(userId, tenantId);
+      if (!link) throw new Forbidden("Inget företag kopplat till det här kontot");
+      if ((await repo.getTenantStatus(tenantId)) !== "active") {
         throw new Forbidden("Kontot är avstängt");
       }
+      await repo.touchLink(userId, tenantId);
+      return sessionIssuer.issue({
+        id: userId,
+        tenant_id: tenantId,
+        role: "customer",
+        customer_id: link.customer_id,
+      });
+    },
 
-      const tokens = await sessionIssuer.issue(user);
-      return { status: "complete" as const, ...tokens };
+    /**
+     * Företagsöversikten: en accountSummary-läsning PER länkat företag,
+     * aldrig en fråga som själv korsar tenant_id (PortalRepository/
+     * PortalService är helt oförändrade, se services/billing/src/portal/).
+     * Tom lista för en lösenordskund (inga rader i user_company_links) —
+     * inget fel, bara en tom översikt.
+     */
+    async overview(userId: number, correlationId: string) {
+      const links = await repo.listCompanyLinks(userId);
+      const companies = await Promise.all(
+        links.map(async (link) => {
+          const summary = await getPortalAccountSummary(
+            deps.redis,
+            link.tenant_id,
+            link.customer_id,
+            correlationId,
+          );
+          return {
+            tenantId: link.tenant_id,
+            tenantName: link.tenant_name,
+            customerId: link.customer_id,
+            outstanding: summary.outstanding,
+            outstandingInvoiceCount: summary.outstandingInvoiceCount,
+          };
+        }),
+      );
+      return { companies };
     },
   };
 }
